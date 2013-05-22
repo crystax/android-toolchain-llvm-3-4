@@ -112,6 +112,7 @@ cross-compile-build-tools:
 	  cd BuildTools ; \
 	  unset CFLAGS ; \
 	  unset CXXFLAGS ; \
+	  unset LDFLAGS ; \
 	  unset SDKROOT ; \
 	  unset UNIVERSAL_SDK_PATH ; \
 	  $(PROJ_SRC_DIR)/configure --build=$(BUILD_TRIPLE) \

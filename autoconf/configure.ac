@@ -424,7 +424,9 @@ case "$llvm_cv_target_arch" in
 esac
 
 dnl Define a substitution, ARCH, for the target architecture
-AC_SUBST(ARCH,$llvm_cv_target_arch)
+if test -z "$ARCH" ; then
+  AC_SUBST(ARCH,$llvm_cv_target_arch)
+fi
 
 dnl Determine what our host architecture.
 dnl This will allow MCJIT regress tests runs only for supported
