@@ -23,6 +23,7 @@
 #include "ARMTargetMachine.h"
 #include "ARMTargetObjectFile.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/CallingConvLower.h"
@@ -7826,6 +7827,73 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 
     BB->addSuccessor(copy0MBB);
     BB->addSuccessor(sinkMBB);
+
+    // Replace the physical register with virtual register, because
+    // physical register is not visible across the basic blocks.
+    MachineRegisterInfo &MRI = F->getRegInfo();
+    const TargetRegisterInfo &TRI = *getTargetMachine().getRegisterInfo();
+
+    // Live analysis of the physical registers
+    DenseMap<unsigned, unsigned> SplittedPRegs;
+    for (MachineBasicBlock::reverse_iterator MII = sinkMBB->instr_rbegin(),
+         MIE = sinkMBB->instr_rend(); MII != MIE; ++MII) {
+      // Transfer function of backward data-flow analysis:
+      // f_i(x) = use_i + (x - def_i)
+
+      // Remove the newly defined registers first
+      for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
+        MachineOperand &MO = MII->getOperand(i);
+        if (MO.isReg() && MO.isDef() &&
+            TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
+          SplittedPRegs.erase(MO.getReg());
+        }
+      }
+
+      // Insert the newly use of registers
+      for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
+        MachineOperand &MO = MII->getOperand(i);
+        if (MO.isReg() && MO.isUse() &&
+            TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
+          SplittedPRegs.insert(std::make_pair(MO.getReg(), 0u));
+        }
+      }
+    }
+
+    // Create virtual registers at the end of thisMBB
+    for (DenseMap<unsigned, unsigned>::iterator I = SplittedPRegs.begin(),
+         E = SplittedPRegs.end(); I != E; ++I) {
+      unsigned PReg = I->first;
+      unsigned VReg = MRI.createVirtualRegister(&ARM::GPRRegClass);
+      BuildMI(BB, dl, TII->get(TargetOpcode::COPY), VReg).addReg(PReg);
+      I->second = VReg;
+    }
+
+    // Replace the live physical registers across the machine basic blocks
+    for (MachineBasicBlock::iterator MII = sinkMBB->instr_begin(),
+         MIE = sinkMBB->instr_end(); MII != MIE; ++MII) {
+      // Replace the physical register use with the virtual register use.
+      for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
+        MachineOperand &MO = MII->getOperand(i);
+        if (MO.isReg() && MO.isUse()) {
+          DenseMap<unsigned, unsigned>::iterator RI
+            = SplittedPRegs.find(MO.getReg());
+          if (RI != SplittedPRegs.end()) {
+            MO.substVirtReg(RI->second, MO.getSubReg(), TRI);
+          }
+        }
+      }
+
+      // If this machine instruction defines the physical register, then this
+      // physical register is no longer being defined across the machine basic
+      // blocks, and should not be replaced by the virtual register.
+      for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i) {
+        MachineOperand &MO = MII->getOperand(i);
+        if (MO.isReg() && MO.isDef() &&
+            TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
+          SplittedPRegs.erase(MO.getReg());
+        }
+      }
+    }
 
     BuildMI(BB, dl, TII->get(ARM::tBcc)).addMBB(sinkMBB)
       .addImm(MI->getOperand(3).getImm()).addReg(MI->getOperand(4).getReg());
