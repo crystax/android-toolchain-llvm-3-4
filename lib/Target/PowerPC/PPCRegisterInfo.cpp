@@ -61,22 +61,22 @@ PPCRegisterInfo::PPCRegisterInfo(const PPCSubtarget &ST)
                        ST.isPPC64() ? 0 : 1,
                        ST.isPPC64() ? 0 : 1),
     Subtarget(ST) {
-  ImmToIdxMap[PPC::LD]   = PPC::LDX;    ImmToIdxMap[PPC::STD]  = PPC::STDX;
-  ImmToIdxMap[PPC::LBZ]  = PPC::LBZX;   ImmToIdxMap[PPC::STB]  = PPC::STBX;
-  ImmToIdxMap[PPC::LHZ]  = PPC::LHZX;   ImmToIdxMap[PPC::LHA]  = PPC::LHAX;
-  ImmToIdxMap[PPC::LWZ]  = PPC::LWZX;   ImmToIdxMap[PPC::LWA]  = PPC::LWAX;
-  ImmToIdxMap[PPC::LFS]  = PPC::LFSX;   ImmToIdxMap[PPC::LFD]  = PPC::LFDX;
-  ImmToIdxMap[PPC::STH]  = PPC::STHX;   ImmToIdxMap[PPC::STW]  = PPC::STWX;
-  ImmToIdxMap[PPC::STFS] = PPC::STFSX;  ImmToIdxMap[PPC::STFD] = PPC::STFDX;
-  ImmToIdxMap[PPC::ADDI] = PPC::ADD4;
-  ImmToIdxMap[PPC::LWA_32] = PPC::LWAX_32;
+  ImmToIdxMap[(unsigned)PPC::LD]   = PPC::LDX;    ImmToIdxMap[(unsigned)PPC::STD]  = PPC::STDX;
+  ImmToIdxMap[(unsigned)PPC::LBZ]  = PPC::LBZX;   ImmToIdxMap[(unsigned)PPC::STB]  = PPC::STBX;
+  ImmToIdxMap[(unsigned)PPC::LHZ]  = PPC::LHZX;   ImmToIdxMap[(unsigned)PPC::LHA]  = PPC::LHAX;
+  ImmToIdxMap[(unsigned)PPC::LWZ]  = PPC::LWZX;   ImmToIdxMap[(unsigned)PPC::LWA]  = PPC::LWAX;
+  ImmToIdxMap[(unsigned)PPC::LFS]  = PPC::LFSX;   ImmToIdxMap[(unsigned)PPC::LFD]  = PPC::LFDX;
+  ImmToIdxMap[(unsigned)PPC::STH]  = PPC::STHX;   ImmToIdxMap[(unsigned)PPC::STW]  = PPC::STWX;
+  ImmToIdxMap[(unsigned)PPC::STFS] = PPC::STFSX;  ImmToIdxMap[(unsigned)PPC::STFD] = PPC::STFDX;
+  ImmToIdxMap[(unsigned)PPC::ADDI] = PPC::ADD4;
+  ImmToIdxMap[(unsigned)PPC::LWA_32] = PPC::LWAX_32;
 
   // 64-bit
-  ImmToIdxMap[PPC::LHA8] = PPC::LHAX8; ImmToIdxMap[PPC::LBZ8] = PPC::LBZX8;
-  ImmToIdxMap[PPC::LHZ8] = PPC::LHZX8; ImmToIdxMap[PPC::LWZ8] = PPC::LWZX8;
-  ImmToIdxMap[PPC::STB8] = PPC::STBX8; ImmToIdxMap[PPC::STH8] = PPC::STHX8;
-  ImmToIdxMap[PPC::STW8] = PPC::STWX8; ImmToIdxMap[PPC::STDU] = PPC::STDUX;
-  ImmToIdxMap[PPC::ADDI8] = PPC::ADD8;
+  ImmToIdxMap[(unsigned)PPC::LHA8] = PPC::LHAX8; ImmToIdxMap[(unsigned)PPC::LBZ8] = PPC::LBZX8;
+  ImmToIdxMap[(unsigned)PPC::LHZ8] = PPC::LHZX8; ImmToIdxMap[(unsigned)PPC::LWZ8] = PPC::LWZX8;
+  ImmToIdxMap[(unsigned)PPC::STB8] = PPC::STBX8; ImmToIdxMap[(unsigned)PPC::STH8] = PPC::STHX8;
+  ImmToIdxMap[(unsigned)PPC::STW8] = PPC::STWX8; ImmToIdxMap[(unsigned)PPC::STDU] = PPC::STDUX;
+  ImmToIdxMap[(unsigned)PPC::ADDI8] = PPC::ADD8;
 }
 
 /// getPointerRegClass - Return the register class to use to hold pointers.

@@ -69,10 +69,14 @@ class EquivalenceClasses {
     friend class EquivalenceClasses;
     mutable const ECValue *Leader, *Next;
     ElemTy Data;
+
+  public:
+    // XXX: Move this constructor to public since STLport implementation needs this.
     // ECValue ctor - Start out with EndOfList pointing to this node, Next is
     // Null, isLeader = true.
     ECValue(const ElemTy &Elt)
       : Leader(this), Next((ECValue*)(intptr_t)1), Data(Elt) {}
+  private:
 
     const ECValue *getLeader() const {
       if (isLeader()) return this;
