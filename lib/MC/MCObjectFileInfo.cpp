@@ -326,6 +326,8 @@ void MCObjectFileInfo::InitELFMCObjectFileInfo(Triple T) {
       FDEEncoding = dwarf::DW_EH_PE_absptr;
       TTypeEncoding = dwarf::DW_EH_PE_absptr;
     }
+  } else if (T.getArch() == Triple::mips || T.getArch() == Triple::mipsel) {
+    PersonalityEncoding = dwarf::DW_EH_PE_indirect;
   }
 
   // Solaris requires different flags for .eh_frame to seemingly every other
