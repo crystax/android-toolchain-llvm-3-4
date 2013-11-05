@@ -808,7 +808,9 @@ public:
     sys::DynamicLibrary::AddSymbol("lstat", (void*)(intptr_t)lstat);
     sys::DynamicLibrary::AddSymbol("stat64", (void*)(intptr_t)stat64);
     sys::DynamicLibrary::AddSymbol("\x1stat64", (void*)(intptr_t)stat64);
+#ifndef __ANDROID__
     sys::DynamicLibrary::AddSymbol("\x1open64", (void*)(intptr_t)open64);
+#endif
     sys::DynamicLibrary::AddSymbol("\x1lseek64", (void*)(intptr_t)lseek64);
     sys::DynamicLibrary::AddSymbol("fstat64", (void*)(intptr_t)fstat64);
     sys::DynamicLibrary::AddSymbol("lstat64", (void*)(intptr_t)lstat64);
