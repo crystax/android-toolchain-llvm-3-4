@@ -32,6 +32,7 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CallSite.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
@@ -60,6 +61,12 @@ STATISTIC(NumNestRemoved   , "Number of nest attributes removed");
 STATISTIC(NumAliasesResolved, "Number of global aliases resolved");
 STATISTIC(NumAliasesRemoved, "Number of global aliases eliminated");
 STATISTIC(NumCXXDtorsRemoved, "Number of global C++ destructors removed");
+
+static cl::opt<bool> DisableGlobalCtorConstPromotion(
+  "disable-global-ctor-const-promotion",
+  cl::desc("Disable constant promotion of global constants with constructors."),
+  cl::init(false),
+  cl::Hidden);
 
 namespace {
   struct GlobalOpt : public ModulePass {
@@ -2796,10 +2803,11 @@ static bool EvaluateStaticConstructor(Function *F, const DataLayout *TD,
            Eval.getMutatedMemory().begin(), E = Eval.getMutatedMemory().end();
          I != E; ++I)
       CommitValueTo(I->second, I->first);
-    for (SmallPtrSet<GlobalVariable*, 8>::const_iterator I =
-           Eval.getInvariants().begin(), E = Eval.getInvariants().end();
-         I != E; ++I)
-      (*I)->setConstant(true);
+    if (!DisableGlobalCtorConstPromotion)
+      for (SmallPtrSet<GlobalVariable*, 8>::const_iterator I =
+             Eval.getInvariants().begin(), E = Eval.getInvariants().end();
+           I != E; ++I)
+        (*I)->setConstant(true);
   }
 
   return EvalSuccess;
