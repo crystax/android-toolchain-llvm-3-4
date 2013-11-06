@@ -45,6 +45,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/CallSite.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -54,6 +55,12 @@
 using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
+
+// Force to store the stack protector cookie in the global variable
+static cl::opt<bool> ForceGlobalVarStackProtectorCookie(
+  "x86-force-gv-stack-cookie",
+  cl::init(false),
+  cl::desc("Store the stack protector cookie in the global variable"));
 
 // Forward declarations.
 static SDValue getMOVL(SelectionDAG &DAG, SDLoc dl, EVT VT, SDValue V1,
@@ -1748,6 +1755,9 @@ X86TargetLowering::findRepresentativeClass(MVT VT) const{
 bool X86TargetLowering::getStackCookieLocation(unsigned &AddressSpace,
                                                unsigned &Offset) const {
   if (!Subtarget->isTargetLinux())
+    return false;
+
+  if (ForceGlobalVarStackProtectorCookie)
     return false;
 
   if (Subtarget->is64Bit()) {
