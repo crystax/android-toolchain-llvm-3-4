@@ -73,4 +73,9 @@ ifneq ($(ENABLE_SHARED),1)
   endif
 endif
 
+LLVM_TOOLS_FILTER := $(strip $(LLVM_TOOLS_FILTER))
+ifdef LLVM_TOOLS_FILTER
+  $(eval $(LLVM_TOOLS_FILTER))
+endif
+
 include $(LEVEL)/Makefile.common
