@@ -5255,6 +5255,33 @@ bool ARMAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
+  // Adjust the operands for the LDRD/STRD abbreviated syntax
+  // The abbreviated syntax of LDRD/STRD allows the user to write an
+  // even general-purpose register to represent a GPR pair.  The following
+  // code will expand it as the GPR pair.
+  if (Operands.size() >= 4 && (Mnemonic == "ldrd" || Mnemonic == "strd")) {
+    SmallVector<unsigned, 2> RtIdx;
+    for (size_t i = 0; i < Operands.size(); ++i) {
+      ARMOperand *Op = static_cast<ARMOperand *>(Operands[i]);
+      if (Op->isReg())
+        RtIdx.push_back(i);
+      if (Op->isMem())
+        break;
+    }
+
+    if (RtIdx.size() == 1) {
+      // This LDRD/STRD instruction is using abbreviated syntax.  Expand
+      // the Rt operand.
+      ARMOperand *Op = static_cast<ARMOperand *>(Operands[RtIdx[0]]);
+      unsigned Reg = Op->getReg();
+      unsigned Reg2 = Reg + 1;
+      assert(!(MRI->getEncodingValue(Reg) & 1) && "Rt must be even");
+      assert(MRI->getRegClass(ARM::GPRRegClassID).contains(Reg2));
+      Operands.insert(Operands.begin() + RtIdx[0] + 1, ARMOperand::CreateReg(
+            Reg2, Op->getStartLoc(), Op->getEndLoc()));
+    }
+  }
+
   // FIXME: As said above, this is all a pretty gross hack.  This instruction
   // does not fit with other "subs" and tblgen.
   // Adjust operands of B9.3.19 SUBS PC, LR, #imm (Thumb2) system instruction
