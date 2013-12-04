@@ -49,7 +49,7 @@ MCOperand ARMAsmPrinter::GetSymbolRef(const MachineOperand &MO,
   }
 
   case ARMII::MO_PLT:
-    Expr = MCSymbolRefExpr::Create(Symbol, MCSymbolRefExpr::VK_ARM_PLT,
+    Expr = MCSymbolRefExpr::Create(Symbol, MCSymbolRefExpr::VK_PLT,
                                    OutContext);
     break;
   }
