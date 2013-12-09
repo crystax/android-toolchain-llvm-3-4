@@ -715,7 +715,11 @@ LLVM_ENUM_ASM_PRINTERS
 LLVM_ENUM_ASM_PARSERS
 LLVM_ENUM_DISASSEMBLERS
 OPTIMIZE_OPTION
+DATA_SECTIONS
+FUNCTION_SECTIONS
+VISIBILITY_INLINES_HIDDEN
 EXTRA_OPTIONS
+GC_SECTIONS
 EXTRA_LD_OPTIONS
 CLANG_SRC_ROOT
 BINUTILS_INCDIR
@@ -5846,6 +5850,9 @@ case "$withval" in
     esac ;;
   *) optimize_option="$withval" ;;
 esac
+if test "$LLVM_CROSS_COMPILING" = "1"; then
+  optimize_option="$optimize_option -Os"
+fi
 OPTIMIZE_OPTION=$optimize_option
 
 { echo "$as_me:$LINENO: result: $optimize_option" >&5
@@ -5863,6 +5870,18 @@ case "$withval" in
   default) EXTRA_OPTIONS= ;;
   *) EXTRA_OPTIONS=$withval ;;
 esac
+
+{ echo "$as_me:$LINENO: checking binary size reduction compiler flags" >&5
+echo $ECHO_N "checking binary size reduction compiler flags... $ECHO_C" >&6; }
+DATA_SECTIONS=`$CXX -Werror -fdata-sections -fsyntax-only -xc /dev/null 2>/dev/null && echo -fdata-sections`
+
+FUNCTION_SECTIONS=`$CXX -Werror -ffunction-sections -fsyntax-only -xc /dev/null 2>/dev/null && echo -ffunction-sections`
+
+VISIBILITY_INLINES_HIDDEN=`$CXX -Werror -fvisibility-inlines-hidden -fsyntax-only -xc /dev/null 2>/dev/null && echo -fvisibility-inlines-hidden`
+
+
+EXTRA_OPTIONS="$EXTRA_OPTIONS $DATA_SECTIONS $FUNCTION_SECTIONS $VISIBILITY_INLINES_HIDDEN"
+
 EXTRA_OPTIONS=$EXTRA_OPTIONS
 
 
@@ -5878,6 +5897,99 @@ case "$withval" in
   default) EXTRA_LD_OPTIONS= ;;
   *) EXTRA_LD_OPTIONS=$withval ;;
 esac
+
+{ echo "$as_me:$LINENO: checking binary size reduction linker flags" >&5
+echo $ECHO_N "checking binary size reduction linker flags... $ECHO_C" >&6; }
+{ echo "$as_me:$LINENO: checking for compiler -Wl,--gc-sections option" >&5
+echo $ECHO_N "checking for compiler -Wl,--gc-sections option... $ECHO_C" >&6; }
+if test "${llvm_cv_link_use_gc_sections+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+   ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+  oldcflags="$CFLAGS"
+  CFLAGS="$CFLAGS -Wl,--gc-sections"
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  llvm_cv_link_use_gc_sections=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	llvm_cv_link_use_gc_sections=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+  CFLAGS="$oldcflags"
+  ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+fi
+{ echo "$as_me:$LINENO: result: $llvm_cv_link_use_gc_sections" >&5
+echo "${ECHO_T}$llvm_cv_link_use_gc_sections" >&6; }
+if test "$llvm_cv_link_use_gc_sections" = yes ; then
+  GC_SECTIONS=-Wl,--gc-sections
+
+  fi
+
+EXTRA_LD_OPTIONS="$EXTRA_LD_OPTIONS $GC_SECTIONS"
+
 EXTRA_LD_OPTIONS=$EXTRA_LD_OPTIONS
 
 
@@ -10590,7 +10702,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<EOF
-#line 10593 "configure"
+#line 10705 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -23161,7 +23273,11 @@ LLVM_ENUM_ASM_PRINTERS!$LLVM_ENUM_ASM_PRINTERS$ac_delim
 LLVM_ENUM_ASM_PARSERS!$LLVM_ENUM_ASM_PARSERS$ac_delim
 LLVM_ENUM_DISASSEMBLERS!$LLVM_ENUM_DISASSEMBLERS$ac_delim
 OPTIMIZE_OPTION!$OPTIMIZE_OPTION$ac_delim
+DATA_SECTIONS!$DATA_SECTIONS$ac_delim
+FUNCTION_SECTIONS!$FUNCTION_SECTIONS$ac_delim
+VISIBILITY_INLINES_HIDDEN!$VISIBILITY_INLINES_HIDDEN$ac_delim
 EXTRA_OPTIONS!$EXTRA_OPTIONS$ac_delim
+GC_SECTIONS!$GC_SECTIONS$ac_delim
 EXTRA_LD_OPTIONS!$EXTRA_LD_OPTIONS$ac_delim
 CLANG_SRC_ROOT!$CLANG_SRC_ROOT$ac_delim
 BINUTILS_INCDIR!$BINUTILS_INCDIR$ac_delim
@@ -23238,10 +23354,6 @@ LLVM_ETCDIR!$LLVM_ETCDIR$ac_delim
 LLVM_INCLUDEDIR!$LLVM_INCLUDEDIR$ac_delim
 LLVM_INFODIR!$LLVM_INFODIR$ac_delim
 LLVM_MANDIR!$LLVM_MANDIR$ac_delim
-LLVM_CONFIGTIME!$LLVM_CONFIGTIME$ac_delim
-BINDINGS_TO_BUILD!$BINDINGS_TO_BUILD$ac_delim
-ALL_BINDINGS!$ALL_BINDINGS$ac_delim
-OCAML_LIBDIR!$OCAML_LIBDIR$ac_delim
 _ACEOF
 
   if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 97; then
@@ -23283,6 +23395,10 @@ _ACEOF
 ac_delim='%!_!# '
 for ac_last_try in false false false false false :; do
   cat >conf$$subs.sed <<_ACEOF
+LLVM_CONFIGTIME!$LLVM_CONFIGTIME$ac_delim
+BINDINGS_TO_BUILD!$BINDINGS_TO_BUILD$ac_delim
+ALL_BINDINGS!$ALL_BINDINGS$ac_delim
+OCAML_LIBDIR!$OCAML_LIBDIR$ac_delim
 ENABLE_VISIBILITY_INLINES_HIDDEN!$ENABLE_VISIBILITY_INLINES_HIDDEN$ac_delim
 RPATH!$RPATH$ac_delim
 RDYNAMIC!$RDYNAMIC$ac_delim
@@ -23291,7 +23407,7 @@ LIBOBJS!$LIBOBJS$ac_delim
 LTLIBOBJS!$LTLIBOBJS$ac_delim
 _ACEOF
 
-  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 6; then
+  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 10; then
     break
   elif $ac_last_try; then
     { { echo "$as_me:$LINENO: error: could not make $CONFIG_STATUS" >&5
