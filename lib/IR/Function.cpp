@@ -213,7 +213,7 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage,
   // Ensure intrinsics have the right parameter attributes.
   if (unsigned IID = getIntrinsicID())
     setAttributes(Intrinsic::getAttributes(getContext(), Intrinsic::ID(IID)));
-
+  seq = -1;
 }
 
 Function::~Function() {

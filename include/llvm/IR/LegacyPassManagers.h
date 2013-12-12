@@ -406,6 +406,11 @@ private:
 /// sequence them to process one function at a time before processing next
 /// function.
 class FPPassManager : public ModulePass, public PMDataManager {
+  /// In parallel compilation, each thread has its own passes, but the passes in the main thread
+  /// may have different behavior, the passes in the main thread are called parent pass
+  /// other passes are children
+private:
+  SmallVector<FPPassManager*, 4> children;
 public:
   static char ID;
   explicit FPPassManager()
@@ -415,6 +420,7 @@ public:
   /// whether any of the passes modifies the module, and if so, return true.
   bool runOnFunction(Function &F);
   bool runOnModule(Module &M);
+  void addChild(FPPassManager *child);
 
   /// cleanup - After running all passes, clean up pass manager cache.
   void cleanup();

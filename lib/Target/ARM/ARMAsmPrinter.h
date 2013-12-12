@@ -66,7 +66,8 @@ public:
   void EmitJumpTable(const MachineInstr *MI);
   void EmitJump2Table(const MachineInstr *MI);
   virtual void EmitInstruction(const MachineInstr *MI) LLVM_OVERRIDE;
-  virtual bool runOnMachineFunction(MachineFunction &F) LLVM_OVERRIDE;
+  /// help another asmPrinter to execute runOnMachineFunction on delegation
+  virtual bool delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm) LLVM_OVERRIDE;
 
   virtual void EmitConstantPool() LLVM_OVERRIDE {
     // we emit constant pools customly!

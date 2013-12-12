@@ -21,6 +21,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/Mangler.h"
 
@@ -224,6 +225,9 @@ void SystemZAsmPrinter::EmitEndOfAsmFile(Module &M) {
       const DataLayout *TD = TM.getDataLayout();
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         OutStreamer.EmitLabel(Stubs[i].first);
         OutStreamer.EmitSymbolValue(Stubs[i].second.getPointer(),
                                     TD->getPointerSize(0));

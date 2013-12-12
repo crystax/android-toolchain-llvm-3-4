@@ -31,6 +31,8 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/ValueHandle.h"
+#include "llvm/Support/RWMutex.h"
+#include "llvm/Support/Mutex.h"
 #include <vector>
 
 namespace llvm {
@@ -232,6 +234,53 @@ public:
   
 class LLVMContextImpl {
 public:
+  enum {
+    MT_OwnedModules = 0,
+    MT_DiagHandler,
+    MT_IntConstants,
+    MT_FPConstants,
+    MT_AttrsSet,
+    MT_AttrsLists,
+    MT_MDStringCache,
+    MT_MDNodeSet,
+    MT_NonUniquedMDNodes,
+    MT_CAZConstants,
+    MT_ArrayConstants,
+    MT_StructConstants,
+    MT_VectorConstants,
+    MT_CPNConstants,
+    MT_UVConstants,
+    MT_CDSConstants,
+    MT_BlockAddresses,
+    MT_ExprConstants,
+    MT_InlineAsms,
+    MT_TheTrueVal,
+    MT_TheFalseVal,
+    MT_LLVMObjects,
+    MT_TypeAllocator,
+    MT_IntegerTypes,
+    MT_FunctionTypes,
+    MT_AnonStructTypes,
+    MT_NamedStructTypes,
+    MT_NamedStructTypesUniqueID,
+    MT_ArrayTypes,
+    MT_VectorTypes,
+    MT_PointerTypes,
+    MT_ASPointerTypes,
+    MT_CustomMDKindNames,
+    MT_ScopeRecords,
+    MT_ScopeInlinedAtRecords,
+	MT_MAX = MT_ScopeInlinedAtRecords
+  };
+  enum {
+    MT_MetadataStore = 0,
+	MT_RW_MAX = MT_MetadataStore
+  };
+public:
+  sys::CondSmartMutex Mutex[MT_MAX + 1];
+  sys::CondSmartRWMutex MutexRW[MT_RW_MAX + 1];
+
+public:
   /// OwnedModules - The set of modules instantiated in this context, and which
   /// will be automatically deleted if this context is deleted.
   SmallPtrSet<Module*, 4> OwnedModules;
@@ -241,7 +290,7 @@ public:
   
   typedef DenseMap<DenseMapAPIntKeyInfo::KeyTy, ConstantInt*, 
                          DenseMapAPIntKeyInfo> IntMapTy;
-  IntMapTy IntConstants;
+  IntMapTy IntConstants, IntConstantsShared;
   
   typedef DenseMap<DenseMapAPFloatKeyInfo::KeyTy, ConstantFP*, 
                          DenseMapAPFloatKeyInfo> FPMapTy;
@@ -314,13 +363,6 @@ public:
   DenseMap<std::pair<Type *, unsigned>, VectorType*> VectorTypes;
   DenseMap<Type*, PointerType*> PointerTypes;  // Pointers in AddrSpace = 0
   DenseMap<std::pair<Type*, unsigned>, PointerType*> ASPointerTypes;
-
-
-  /// ValueHandles - This map keeps track of all of the value handles that are
-  /// watching a Value*.  The Value::HasValueHandle bit is used to know
-  /// whether or not a value has an entry in this map.
-  typedef DenseMap<Value*, ValueHandleBase*> ValueHandlesTy;
-  ValueHandlesTy ValueHandles;
   
   /// CustomMDKindNames - Map to hold the metadata string to ID mapping.
   StringMap<unsigned> CustomMDKindNames;

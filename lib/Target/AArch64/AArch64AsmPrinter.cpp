@@ -285,6 +285,9 @@ void AArch64AsmPrinter::EmitEndOfAsmFile(Module &M) {
       const DataLayout *TD = TM.getDataLayout();
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         OutStreamer.EmitLabel(Stubs[i].first);
         OutStreamer.EmitSymbolValue(Stubs[i].second.getPointer(),
                                     TD->getPointerSize(0));
@@ -294,8 +297,16 @@ void AArch64AsmPrinter::EmitEndOfAsmFile(Module &M) {
   }
 }
 
-bool AArch64AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
-  return AsmPrinter::runOnMachineFunction(MF);
+static sys::CondSmartMutex aArch64AsmPrinterMutex;
+/// help another asmPrinter to execute runOnMachineFunction on delegation
+bool AArch64AsmPrinter::delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm) {
+  sys::CondScopedLock locked(aArch64AsmPrinterMutex);
+
+  if (llvm_is_multithreaded()) {
+    OutStreamer.setCurrFunc(MF.getFunctionNumber());
+  }
+
+  return AsmPrinter::delegateRunOnMachineFunctionFor(MF, childAsm);
 }
 
 // Force static initialization.

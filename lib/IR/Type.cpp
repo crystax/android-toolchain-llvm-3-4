@@ -316,12 +316,13 @@ IntegerType *IntegerType::get(LLVMContext &C, unsigned NumBits) {
   default: 
     break;
   }
-  
+  sys::CondScopedLock locked(C.pImpl->Mutex[LLVMContextImpl::MT_IntegerTypes]);
   IntegerType *&Entry = C.pImpl->IntegerTypes[NumBits];
   
-  if (Entry == 0)
+  if (Entry == 0) {
+    sys::CondScopedLock locked(C.pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
     Entry = new (C.pImpl->TypeAllocator) IntegerType(C, NumBits);
-  
+  }
   return Entry;
 }
 
@@ -362,11 +363,13 @@ FunctionType *FunctionType::get(Type *ReturnType,
                                 ArrayRef<Type*> Params, bool isVarArg) {
   LLVMContextImpl *pImpl = ReturnType->getContext().pImpl;
   FunctionTypeKeyInfo::KeyTy Key(ReturnType, Params, isVarArg);
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_FunctionTypes]);
   LLVMContextImpl::FunctionTypeMap::iterator I =
     pImpl->FunctionTypes.find_as(Key);
   FunctionType *FT;
 
   if (I == pImpl->FunctionTypes.end()) {
+    sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
     FT = (FunctionType*) pImpl->TypeAllocator.
       Allocate(sizeof(FunctionType) + sizeof(Type*) * (Params.size() + 1),
                AlignOf<FunctionType>::Alignment);
@@ -406,13 +409,17 @@ StructType *StructType::get(LLVMContext &Context, ArrayRef<Type*> ETypes,
                             bool isPacked) {
   LLVMContextImpl *pImpl = Context.pImpl;
   AnonStructTypeKeyInfo::KeyTy Key(ETypes, isPacked);
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_AnonStructTypes]);
   LLVMContextImpl::StructTypeMap::iterator I =
     pImpl->AnonStructTypes.find_as(Key);
   StructType *ST;
 
   if (I == pImpl->AnonStructTypes.end()) {
     // Value not found.  Create a new type!
-    ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+    {
+      sys::CondScopedLock locked(Context.pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
+      ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+    }
     ST->setSubclassData(SCDB_IsLiteral);  // Literal struct.
     ST->setBody(ETypes, isPacked);
     Context.pImpl->AnonStructTypes[ST] = true;
@@ -431,7 +438,11 @@ void StructType::setBody(ArrayRef<Type*> Elements, bool isPacked) {
     setSubclassData(getSubclassData() | SCDB_Packed);
 
   unsigned NumElements = Elements.size();
-  Type **Elts = getContext().pImpl->TypeAllocator.Allocate<Type*>(NumElements);
+  Type **Elts;
+  {
+    sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
+    Elts = getContext().pImpl->TypeAllocator.Allocate<Type*>(NumElements);
+  }
   memcpy(Elts, Elements.data(), sizeof(Elements[0]) * NumElements);
   
   ContainedTys = Elts;
@@ -440,6 +451,8 @@ void StructType::setBody(ArrayRef<Type*> Elements, bool isPacked) {
 
 void StructType::setName(StringRef Name) {
   if (Name == getName()) return;
+
+  sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_NamedStructTypes]);
 
   StringMap<StructType *> &SymbolTable = getContext().pImpl->NamedStructTypes;
   typedef StringMap<StructType *>::MapEntryTy EntryTy;
@@ -472,10 +485,15 @@ void StructType::setName(StringRef Name) {
     do {
       TempStr.resize(NameSize + 1);
       TmpStream.resync();
-      TmpStream << getContext().pImpl->NamedStructTypesUniqueID++;
-      
-      Entry = &getContext().pImpl->
-                 NamedStructTypes.GetOrCreateValue(TmpStream.str());
+      {
+        sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_NamedStructTypesUniqueID]);
+        TmpStream << getContext().pImpl->NamedStructTypesUniqueID++;
+      }
+      {
+        sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_NamedStructTypes]);
+        Entry = &getContext().pImpl->
+                   NamedStructTypes.GetOrCreateValue(TmpStream.str());
+      }
     } while (Entry->getValue());
   }
 
@@ -492,7 +510,11 @@ void StructType::setName(StringRef Name) {
 // StructType Helper functions.
 
 StructType *StructType::create(LLVMContext &Context, StringRef Name) {
-  StructType *ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+  StructType *ST;
+  {
+    sys::CondScopedLock locked(Context.pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
+    ST = new (Context.pImpl->TypeAllocator) StructType(Context);
+  }
   if (!Name.empty())
     ST->setName(Name);
   return ST;
@@ -681,11 +703,14 @@ ArrayType *ArrayType::get(Type *elementType, uint64_t NumElements) {
   assert(isValidElementType(ElementType) && "Invalid type for array element!");
     
   LLVMContextImpl *pImpl = ElementType->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ArrayTypes]);
   ArrayType *&Entry = 
     pImpl->ArrayTypes[std::make_pair(ElementType, NumElements)];
   
-  if (Entry == 0)
+  if (Entry == 0) {
+    sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
     Entry = new (pImpl->TypeAllocator) ArrayType(ElementType, NumElements);
+  }
   return Entry;
 }
 
@@ -710,11 +735,14 @@ VectorType *VectorType::get(Type *elementType, unsigned NumElements) {
          "Elements of a VectorType must be a primitive type");
   
   LLVMContextImpl *pImpl = ElementType->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_VectorTypes]);
   VectorType *&Entry = ElementType->getContext().pImpl
     ->VectorTypes[std::make_pair(ElementType, NumElements)];
   
-  if (Entry == 0)
+  if (Entry == 0) {
+    sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
     Entry = new (pImpl->TypeAllocator) VectorType(ElementType, NumElements);
+  }
   return Entry;
 }
 
@@ -732,13 +760,15 @@ PointerType *PointerType::get(Type *EltTy, unsigned AddressSpace) {
   assert(isValidElementType(EltTy) && "Invalid type for pointer element!");
   
   LLVMContextImpl *CImpl = EltTy->getContext().pImpl;
-  
+  sys::CondScopedLock locked(CImpl->Mutex[LLVMContextImpl::MT_PointerTypes]);
   // Since AddressSpace #0 is the common case, we special case it.
   PointerType *&Entry = AddressSpace == 0 ? CImpl->PointerTypes[EltTy]
      : CImpl->ASPointerTypes[std::make_pair(EltTy, AddressSpace)];
 
-  if (Entry == 0)
+  if (Entry == 0) {
+    sys::CondScopedLock locked(CImpl->Mutex[LLVMContextImpl::MT_TypeAllocator]);
     Entry = new (CImpl->TypeAllocator) PointerType(EltTy, AddressSpace);
+  }
   return Entry;
 }
 

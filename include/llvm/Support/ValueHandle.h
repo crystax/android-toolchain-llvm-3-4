@@ -70,11 +70,7 @@ public:
     if (isValid(VP.getPointer()))
       AddToUseList();
   }
-  ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS)
-    : PrevPair(0, Kind), Next(0), VP(RHS.VP) {
-    if (isValid(VP.getPointer()))
-      AddToExistingUseList(RHS.getPrevPtr());
-  }
+  ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS);
   ~ValueHandleBase() {
     if (isValid(VP.getPointer()))
       RemoveFromUseList();
@@ -88,13 +84,7 @@ public:
     return RHS;
   }
 
-  Value *operator=(const ValueHandleBase &RHS) {
-    if (VP.getPointer() == RHS.VP.getPointer()) return RHS.VP.getPointer();
-    if (isValid(VP.getPointer())) RemoveFromUseList();
-    VP.setPointer(RHS.VP.getPointer());
-    if (isValid(VP.getPointer())) AddToExistingUseList(RHS.getPrevPtr());
-    return VP.getPointer();
-  }
+  Value *operator=(const ValueHandleBase &RHS);
 
   Value *operator->() const { return getValPtr(); }
   Value &operator*() const { return *getValPtr(); }
@@ -115,6 +105,9 @@ public:
   // Callbacks made from Value.
   static void ValueIsDeleted(Value *V);
   static void ValueIsRAUWd(Value *Old, Value *New);
+private:
+  static void ValueIsDeletedInternal(Value *V);
+  static void ValueIsRAUWdInternal(Value *Old, Value *New);
 
 private:
   // Internal implementation details.
@@ -126,15 +119,19 @@ private:
   /// List is the address of either the head of the list or a Next node within
   /// the existing use list.
   void AddToExistingUseList(ValueHandleBase **List);
+  void AddToExistingUseListInternal(ValueHandleBase **List);
 
   /// AddToExistingUseListAfter - Add this ValueHandle to the use list after
   /// Node.
   void AddToExistingUseListAfter(ValueHandleBase *Node);
+  void AddToExistingUseListAfterInternal(ValueHandleBase *Node);
 
   /// AddToUseList - Add this ValueHandle to the use list for VP.
   void AddToUseList();
   /// RemoveFromUseList - Remove this ValueHandle from its current use list.
   void RemoveFromUseList();
+  void RemoveFromUseListInternal();
+
 };
 
 /// WeakVH - This is a value handle that tries hard to point to a Value, even

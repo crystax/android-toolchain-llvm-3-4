@@ -149,6 +149,48 @@ namespace llvm
     };
 
     typedef SmartScopedLock<false> ScopedLock;
+
+    /// Conditional mutex and lock, it is empty wrapper when condition is not met
+    class CondSmartMutex : public MutexImpl {
+    public:
+      explicit CondSmartMutex() : MutexImpl(true) { }
+
+      bool acquire() {
+        if (llvm_is_multithreaded()) {
+          return MutexImpl::acquire();
+        }
+        return true;
+      }
+
+      bool release() {
+        if (llvm_is_multithreaded()) {
+          return MutexImpl::release();
+        }
+        return true;
+      }
+
+      private:
+        CondSmartMutex(const CondSmartMutex &original);
+        void operator=(const CondSmartMutex&);
+    };
+
+    class CondScopedLock  {
+      CondSmartMutex &mtx;
+      bool cond_enable;
+    public:
+      CondScopedLock(CondSmartMutex &m, bool cond = true) : mtx(m), cond_enable(cond) {
+        if (cond_enable) {
+          mtx.acquire();
+        }
+      }
+
+      ~CondScopedLock() {
+        if (cond_enable) {
+          mtx.release();
+        }
+      }
+    };
+
   }
 }
 

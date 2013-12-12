@@ -70,7 +70,7 @@ public:
     return "Mips Assembly Printer";
   }
 
-  virtual bool runOnMachineFunction(MachineFunction &MF);
+  virtual bool delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm);
 
   virtual void EmitConstantPool() LLVM_OVERRIDE {
     if (!UsingConstantPools)

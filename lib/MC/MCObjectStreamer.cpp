@@ -57,9 +57,10 @@ void MCObjectStreamer::reset() {
 MCFragment *MCObjectStreamer::getCurrentFragment() const {
   assert(getCurrentSectionData() && "No current section!");
 
-  if (CurInsertionPoint != getCurrentSectionData()->getFragmentList().begin())
-    return prior(CurInsertionPoint);
-
+  /*if (CurInsertionPoint != getCurrentSectionData()->getFragmentList().begin())
+    return prior(CurInsertionPoint);*/
+  if (!getCurrentSectionData()->empty())
+    return &getCurrentSectionData()->getCurrFrag();
   return 0;
 }
 
@@ -67,7 +68,9 @@ MCDataFragment *MCObjectStreamer::getOrCreateDataFragment() const {
   MCDataFragment *F = dyn_cast_or_null<MCDataFragment>(getCurrentFragment());
   // When bundling is enabled, we don't want to add data to a fragment that
   // already has instructions (see MCELFStreamer::EmitInstToData for details)
-  if (!F || (Assembler->isBundlingEnabled() && F->hasInstructions())) {
+  MCSectionData *SD = getCurrentSectionData();
+  bool needChangeDF = Assembler->getCurrFunc() != SD->getCurrentFunc() && Assembler->getCurrFunc() != SD->getCurrentFunc() + 1;
+  if (!F || (Assembler->isBundlingEnabled() && F->hasInstructions()) || needChangeDF) {
     F = new MCDataFragment();
     insert(F);
   }
@@ -390,4 +393,8 @@ void MCObjectStreamer::FinishImpl() {
     MCGenDwarfInfo::Emit(this, LineSectionSymbol);
 
   getAssembler().Finish();
+}
+
+void MCObjectStreamer::setCurrFunc(int func) {
+  Assembler->setCurrFunc(func);
 }

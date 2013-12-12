@@ -288,6 +288,8 @@ namespace {
 /// It batches all Module passes and function pass managers together and
 /// sequences them to process one module.
 class MPPassManager : public Pass, public PMDataManager {
+private:
+  SmallVector<MPPassManager*, 4> children;
 public:
   static char ID;
   explicit MPPassManager() :
@@ -322,6 +324,8 @@ public:
   /// doFinalization - Run all of the finalizers for the module passes.
   ///
   bool doFinalization();
+
+  void addChild(MPPassManager *child);
 
   /// Pass Manager itself does not invalidate any analysis info.
   void getAnalysisUsage(AnalysisUsage &Info) const {
@@ -388,7 +392,8 @@ class PassManagerImpl : public Pass,
                         public PMDataManager,
                         public PMTopLevelManager {
   virtual void anchor();
-
+private:
+  SmallVector<PassManagerImpl*, 4> children;
 public:
   static char ID;
   explicit PassManagerImpl() :
@@ -414,6 +419,8 @@ public:
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;
+
+  void addChild(PassManagerImpl *child);
 
   /// doInitialization - Run all of the initializers for the module passes.
   ///
@@ -1509,6 +1516,9 @@ void FPPassManager::dumpPassStructure(unsigned Offset) {
   }
 }
 
+static sys::CondSmartMutex workingFuncMutex;
+static Module::iterator workingFuncIter;
+static Module::iterator endFuncIter;
 
 /// Execute all of the passes scheduled for execution by invoking
 /// runOnFunction method.  Keep track of whether any of the passes modifies
@@ -1551,12 +1561,70 @@ bool FPPassManager::runOnFunction(Function &F) {
   return Changed;
 }
 
+static Function* consumeFunc() {
+  sys::CondScopedLock locked(workingFuncMutex);
+  if (workingFuncIter == endFuncIter) {
+    return NULL;
+  }
+  Function *func = &(*workingFuncIter);
+  ++workingFuncIter;
+  return func;
+}
+
+struct FuncThreadInfo {
+public:
+  FuncThreadInfo(FPPassManager *fp, bool bl, int id) :
+      fpm(fp), Result(bl), tid(id) {}
+public:
+  FPPassManager *fpm;
+  bool Result;
+  int tid;
+};
+
+static void RunFuncOnThread_Dispatch(void *UserData) {
+  FuncThreadInfo *Info = reinterpret_cast<FuncThreadInfo*>(UserData);
+  Info->Result = false;
+  while(Function *func = consumeFunc()) {
+    if (func->getSeq() < 0) {
+      continue;
+    }
+    Info->Result |= Info->fpm->runOnFunction(*func);
+  }
+}
+
 bool FPPassManager::runOnModule(Module &M) {
   bool Changed = false;
+  int number = 0;
+  for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I) {
+    if (!I->isDeclaration()) {
+      I->setSeq(number++);
+    }
+  }
+  if (!children.size()) {
+    for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
+      Changed |= runOnFunction(*I);
+    return Changed;
+  }
 
-  for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
-    Changed |= runOnFunction(*I);
+  workingFuncIter = M.begin();
+  endFuncIter = M.end();
+  FuncThreadInfo **Info = new FuncThreadInfo*[children.size() + 1];
+  Info[0] = new FuncThreadInfo(this, false, 0);
+  for (unsigned childs = 0; childs < children.size(); childs++) {
+    Info[childs + 1] = new FuncThreadInfo(children[childs], false, childs + 1);
+  }
 
+  llvm_start_multithreaded();
+
+  llvm_execute_on_multi_threads(RunFuncOnThread_Dispatch, (void**)Info, children.size() + 1, 0);
+
+  llvm_stop_multithreaded();
+
+  for (unsigned childs = 0; childs < children.size() + 1; childs++) {
+    Changed |= Info[childs]->Result;
+    delete Info[childs];
+  }
+  delete[] Info;
   return Changed;
 }
 
@@ -1578,6 +1646,29 @@ bool FPPassManager::doFinalization(Module &M) {
   return Changed;
 }
 
+void FPPassManager::addChild(FPPassManager *child) {
+  children.push_back(child);
+
+  for (unsigned Index = 0; Index < child->getNumContainedPasses(); ++Index) {
+    FunctionPass *FP = child->getContainedPass(Index);
+    FP->setParentPass(getContainedPass(Index));
+  }
+}
+
+void MPPassManager::addChild(MPPassManager *child) {
+  children.push_back(child);
+  for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
+    FPPassManager *MP = static_cast<FPPassManager*>(getContainedPass(Index));
+    FPPassManager *childMP = NULL;
+    if (Index < child->getNumContainedPasses()) {
+      childMP = static_cast<FPPassManager*>(child->getContainedPass(Index));
+    }
+    if (!MP || !childMP) {
+      continue;
+    }
+    MP->addChild(childMP);
+  }
+}
 //===----------------------------------------------------------------------===//
 // MPPassManager implementation
 
@@ -1588,18 +1679,20 @@ bool
 MPPassManager::runOnModule(Module &M) {
   bool Changed = false;
 
-  // Initialize on-the-fly passes
-  for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
-       I = OnTheFlyManagers.begin(), E = OnTheFlyManagers.end();
-       I != E; ++I) {
-    FunctionPassManagerImpl *FPP = I->second;
-    Changed |= FPP->doInitialization(M);
+  for (unsigned childs = children.size() + 1; childs > 0; childs--) {
+    MPPassManager *childMPP = childs < children.size() + 1 ? children[childs - 1] : this;
+    // Initialize on-the-fly passes
+    for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
+         I = childMPP->OnTheFlyManagers.begin(), E = childMPP->OnTheFlyManagers.end();
+         I != E; ++I) {
+      FunctionPassManagerImpl *FPP = I->second;
+      Changed |= FPP->doInitialization(M);
+    }
+
+    // Initialize module passes
+    for (unsigned Index = 0; Index < childMPP->getNumContainedPasses(); ++Index)
+      Changed |= childMPP->getContainedPass(Index)->doInitialization(M);
   }
-
-  // Initialize module passes
-  for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index)
-    Changed |= getContainedPass(Index)->doInitialization(M);
-
   for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
     ModulePass *MP = getContainedPass(Index);
     bool LocalChanged = false;
@@ -1607,7 +1700,10 @@ MPPassManager::runOnModule(Module &M) {
     dumpPassInfo(MP, EXECUTION_MSG, ON_MODULE_MSG, M.getModuleIdentifier());
     dumpRequiredSet(MP);
 
-    initializeAnalysisImpl(MP);
+    for (unsigned childs = children.size() + 1; childs > 0; childs--) {
+      MPPassManager *childMPP = childs < children.size() + 1 ? children[childs - 1] : this;
+      childMPP->initializeAnalysisImpl(MP);
+    }
 
     {
       PassManagerPrettyStackEntry X(MP, M);
@@ -1622,25 +1718,32 @@ MPPassManager::runOnModule(Module &M) {
                    M.getModuleIdentifier());
     dumpPreservedSet(MP);
 
-    verifyPreservedAnalysis(MP);
-    removeNotPreservedAnalysis(MP);
-    recordAvailableAnalysis(MP);
-    removeDeadPasses(MP, M.getModuleIdentifier(), ON_MODULE_MSG);
+    for (unsigned childs = 0; childs < children.size() + 1; childs++) {
+      MPPassManager *childMPP = childs < children.size() ? children[childs] : this;
+      childMPP->verifyPreservedAnalysis(MP);
+      childMPP->removeNotPreservedAnalysis(MP);
+      childMPP->recordAvailableAnalysis(MP);
+      childMPP->removeDeadPasses(MP, M.getModuleIdentifier(), ON_MODULE_MSG);
+    }
   }
 
-  // Finalize module passes
-  for (int Index = getNumContainedPasses() - 1; Index >= 0; --Index)
-    Changed |= getContainedPass(Index)->doFinalization(M);
 
-  // Finalize on-the-fly passes
-  for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
-       I = OnTheFlyManagers.begin(), E = OnTheFlyManagers.end();
-       I != E; ++I) {
-    FunctionPassManagerImpl *FPP = I->second;
-    // We don't know when is the last time an on-the-fly pass is run,
-    // so we need to releaseMemory / finalize here
-    FPP->releaseMemoryOnTheFly();
-    Changed |= FPP->doFinalization(M);
+  for (unsigned childs = 0; childs < children.size() + 1; childs++) {
+    MPPassManager *childMPP = childs < children.size() ? children[childs] : this;
+    // Finalize module passes
+    for (int Index = childMPP->getNumContainedPasses() - 1; Index >= 0; --Index)
+      Changed |= childMPP->getContainedPass(Index)->doFinalization(M);
+
+    // Finalize on-the-fly passes
+    for (std::map<Pass *, FunctionPassManagerImpl *>::iterator
+         I = childMPP->OnTheFlyManagers.begin(), E = childMPP->OnTheFlyManagers.end();
+         I != E; ++I) {
+      FunctionPassManagerImpl *FPP = I->second;
+      // We don't know when is the last time an on-the-fly pass is run,
+      // so we need to releaseMemory / finalize here
+      FPP->releaseMemoryOnTheFly();
+      Changed |= FPP->doFinalization(M);
+    }
   }
 
   return Changed;
@@ -1700,24 +1803,41 @@ bool PassManagerImpl::run(Module &M) {
   dumpArguments();
   dumpPasses();
 
-  SmallVectorImpl<ImmutablePass *>& IPV = getImmutablePasses();
-  for (SmallVectorImpl<ImmutablePass *>::const_iterator I = IPV.begin(),
-       E = IPV.end(); I != E; ++I) {
-    Changed |= (*I)->doInitialization(M);
+  for (unsigned childs = children.size() + 1; childs > 0; childs--) {
+    PassManagerImpl *childPMI = childs < children.size() + 1 ? children[childs - 1] : this;
+    SmallVectorImpl<ImmutablePass *>& IPV = childPMI->getImmutablePasses();
+    for (SmallVectorImpl<ImmutablePass *>::const_iterator I = IPV.begin(),
+         E = IPV.end(); I != E; ++I) {
+      Changed |= (*I)->doInitialization(M);
+    }
+
+    childPMI->initializeAllAnalysisInfo();
   }
 
-  initializeAllAnalysisInfo();
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index)
     Changed |= getContainedManager(Index)->runOnModule(M);
 
-  for (SmallVectorImpl<ImmutablePass *>::const_iterator I = IPV.begin(),
-       E = IPV.end(); I != E; ++I) {
-    Changed |= (*I)->doFinalization(M);
+  for (unsigned childs = 0; childs < children.size() + 1; childs++) {
+    PassManagerImpl *childPMI = childs < children.size() ? children[childs] : this;
+    SmallVectorImpl<ImmutablePass *>& IPV = childPMI->getImmutablePasses();
+    for (SmallVectorImpl<ImmutablePass *>::const_iterator I = IPV.begin(),
+         E = IPV.end(); I != E; ++I) {
+      Changed |= (*I)->doFinalization(M);
+    }
   }
 
   return Changed;
 }
 
+void PassManagerImpl::addChild(PassManagerImpl *child) {
+  children.push_back(child);
+  for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
+    MPPassManager *MP = getContainedManager(Index);
+    if (Index < child->getNumContainedManagers()) {
+      MP->addChild(child->getContainedManager(Index));
+    }
+  }
+}
 //===----------------------------------------------------------------------===//
 // PassManager implementation
 
@@ -1740,6 +1860,9 @@ void PassManager::add(Pass *P) {
   PM->add(P);
 }
 
+void PassManager::addChild(PassManager *child) {
+  PM->addChild(child->PM);
+}
 /// run - Execute all of the passes scheduled for execution.  Keep track of
 /// whether any of the passes modifies the module, and if so, return true.
 bool PassManager::run(Module &M) {

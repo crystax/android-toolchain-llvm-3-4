@@ -21,6 +21,7 @@ MDNode *DebugLoc::getScope(const LLVMContext &Ctx) const {
   if (ScopeIdx == 0) return 0;
   
   if (ScopeIdx > 0) {
+    sys::CondScopedLock locked(Ctx.pImpl->Mutex[LLVMContextImpl::MT_ScopeRecords]);
     // Positive ScopeIdx is an index into ScopeRecords, which has no inlined-at
     // position specified.
     assert(unsigned(ScopeIdx) <= Ctx.pImpl->ScopeRecords.size() &&
@@ -28,6 +29,7 @@ MDNode *DebugLoc::getScope(const LLVMContext &Ctx) const {
     return Ctx.pImpl->ScopeRecords[ScopeIdx-1].get();
   }
   
+  sys::CondScopedLock locked(Ctx.pImpl->Mutex[LLVMContextImpl::MT_ScopeInlinedAtRecords]);
   // Otherwise, the index is in the ScopeInlinedAtRecords array.
   assert(unsigned(-ScopeIdx) <= Ctx.pImpl->ScopeInlinedAtRecords.size() &&
          "Invalid ScopeIdx");
@@ -38,7 +40,7 @@ MDNode *DebugLoc::getInlinedAt(const LLVMContext &Ctx) const {
   // Positive ScopeIdx is an index into ScopeRecords, which has no inlined-at
   // position specified.  Zero is invalid.
   if (ScopeIdx >= 0) return 0;
-  
+  sys::CondScopedLock locked(Ctx.pImpl->Mutex[LLVMContextImpl::MT_ScopeInlinedAtRecords]);
   // Otherwise, the index is in the ScopeInlinedAtRecords array.
   assert(unsigned(-ScopeIdx) <= Ctx.pImpl->ScopeInlinedAtRecords.size() &&
          "Invalid ScopeIdx");
@@ -56,6 +58,7 @@ void DebugLoc::getScopeAndInlinedAt(MDNode *&Scope, MDNode *&IA,
   if (ScopeIdx > 0) {
     // Positive ScopeIdx is an index into ScopeRecords, which has no inlined-at
     // position specified.
+    sys::CondScopedLock locked(Ctx.pImpl->Mutex[LLVMContextImpl::MT_ScopeRecords]);
     assert(unsigned(ScopeIdx) <= Ctx.pImpl->ScopeRecords.size() &&
            "Invalid ScopeIdx!");
     Scope = Ctx.pImpl->ScopeRecords[ScopeIdx-1].get();
@@ -63,6 +66,7 @@ void DebugLoc::getScopeAndInlinedAt(MDNode *&Scope, MDNode *&IA,
     return;
   }
   
+  sys::CondScopedLock locked(Ctx.pImpl->Mutex[LLVMContextImpl::MT_ScopeInlinedAtRecords]);
   // Otherwise, the index is in the ScopeInlinedAtRecords array.
   assert(unsigned(-ScopeIdx) <= Ctx.pImpl->ScopeInlinedAtRecords.size() &&
          "Invalid ScopeIdx");
@@ -160,6 +164,7 @@ unsigned DenseMapInfo<DebugLoc>::getHashValue(const DebugLoc &Key) {
 
 int LLVMContextImpl::getOrAddScopeRecordIdxEntry(MDNode *Scope,
                                                  int ExistingIdx) {
+  sys::CondScopedLock locked(Mutex[MT_ScopeRecords]);
   // If we already have an entry for this scope, return it.
   int &Idx = ScopeRecordIdx[Scope];
   if (Idx) return Idx;
@@ -183,6 +188,7 @@ int LLVMContextImpl::getOrAddScopeRecordIdxEntry(MDNode *Scope,
 
 int LLVMContextImpl::getOrAddScopeInlinedAtIdxEntry(MDNode *Scope, MDNode *IA,
                                                     int ExistingIdx) {
+  sys::CondScopedLock locked(Mutex[MT_ScopeInlinedAtRecords]);
   // If we already have an entry, return it.
   int &Idx = ScopeInlinedAtIdx[std::make_pair(Scope, IA)];
   if (Idx) return Idx;
@@ -222,8 +228,11 @@ void DebugRecVH::deleted() {
   
   // If the index is positive, it is an entry in ScopeRecords.
   if (Idx > 0) {
-    assert(Ctx->ScopeRecordIdx[Cur] == Idx && "Mapping out of date!");
-    Ctx->ScopeRecordIdx.erase(Cur);
+    {
+      sys::CondScopedLock locked(Ctx->Mutex[LLVMContextImpl::MT_ScopeRecords]);
+      assert(Ctx->ScopeRecordIdx[Cur] == Idx && "Mapping out of date!");
+      Ctx->ScopeRecordIdx.erase(Cur);
+    }
     // Reset this VH to null and we're done.
     setValPtr(0);
     Idx = 0;
@@ -241,12 +250,13 @@ void DebugRecVH::deleted() {
   MDNode *OldInlinedAt = Entry.second.get();
   assert(OldScope != 0 && OldInlinedAt != 0 &&
          "Entry should be non-canonical if either val dropped to null");
-
-  // Otherwise, we do have an entry in it, nuke it and we're done.
-  assert(Ctx->ScopeInlinedAtIdx[std::make_pair(OldScope, OldInlinedAt)] == Idx&&
-         "Mapping out of date");
-  Ctx->ScopeInlinedAtIdx.erase(std::make_pair(OldScope, OldInlinedAt));
-  
+  {
+    sys::CondScopedLock locked(Ctx->Mutex[LLVMContextImpl::MT_ScopeInlinedAtRecords]);
+    // Otherwise, we do have an entry in it, nuke it and we're done.
+    assert(Ctx->ScopeInlinedAtIdx[std::make_pair(OldScope, OldInlinedAt)] == Idx&&
+           "Mapping out of date");
+    Ctx->ScopeInlinedAtIdx.erase(std::make_pair(OldScope, OldInlinedAt));
+  }
   // Reset this VH to null.  Drop both 'Idx' values to null to indicate that
   // we're in non-canonical form now.
   setValPtr(0);
@@ -271,8 +281,11 @@ void DebugRecVH::allUsesReplacedWith(Value *NewVa) {
   
   // If the index is positive, it is an entry in ScopeRecords.
   if (Idx > 0) {
-    assert(Ctx->ScopeRecordIdx[OldVal] == Idx && "Mapping out of date!");
-    Ctx->ScopeRecordIdx.erase(OldVal);
+    {
+      sys::CondScopedLock locked(Ctx->Mutex[LLVMContextImpl::MT_ScopeRecords]);
+      assert(Ctx->ScopeRecordIdx[OldVal] == Idx && "Mapping out of date!");
+      Ctx->ScopeRecordIdx.erase(OldVal);
+    }
     setValPtr(NewVal);
 
     int NewEntry = Ctx->getOrAddScopeRecordIdxEntry(NewVal, Idx);
@@ -295,12 +308,13 @@ void DebugRecVH::allUsesReplacedWith(Value *NewVa) {
   MDNode *OldInlinedAt = Entry.second.get();
   assert(OldScope != 0 && OldInlinedAt != 0 &&
          "Entry should be non-canonical if either val dropped to null");
-  
-  // Otherwise, we do have an entry in it, nuke it and we're done.
-  assert(Ctx->ScopeInlinedAtIdx[std::make_pair(OldScope, OldInlinedAt)] == Idx&&
-         "Mapping out of date");
-  Ctx->ScopeInlinedAtIdx.erase(std::make_pair(OldScope, OldInlinedAt));
-  
+  {
+    sys::CondScopedLock locked(Ctx->Mutex[LLVMContextImpl::MT_ScopeInlinedAtRecords]);
+    // Otherwise, we do have an entry in it, nuke it and we're done.
+    assert(Ctx->ScopeInlinedAtIdx[std::make_pair(OldScope, OldInlinedAt)] == Idx&&
+           "Mapping out of date");
+    Ctx->ScopeInlinedAtIdx.erase(std::make_pair(OldScope, OldInlinedAt));
+  }
   // Reset this VH to the new value.
   setValPtr(NewVal);
 

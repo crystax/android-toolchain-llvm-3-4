@@ -46,7 +46,7 @@ namespace {
 struct PassRegistryImpl {
   /// PassInfoMap - Keep track of the PassInfo object for each registered pass.
   typedef DenseMap<const void*, const PassInfo*> MapType;
-  MapType PassInfoMap;
+  MapType PassInfoMap, PassInfoMapShared;
   
   typedef StringMap<const PassInfo*> StringMapType;
   StringMapType PassInfoStringMap;
@@ -85,10 +85,14 @@ PassRegistry::~PassRegistry() {
 }
 
 const PassInfo *PassRegistry::getPassInfo(const void *TI) const {
-  sys::SmartScopedReader<true> Guard(*Lock);
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
   PassRegistryImpl::MapType::const_iterator I = Impl->PassInfoMap.find(TI);
-  return I != Impl->PassInfoMap.end() ? I->second : 0;
+  if (I != Impl->PassInfoMap.end())
+    return I->second;
+
+  sys::SmartScopedReader<true> Guard(*Lock);
+  I = Impl->PassInfoMapShared.find(TI);
+  return I != Impl->PassInfoMapShared.end() ? I->second : 0;
 }
 
 const PassInfo *PassRegistry::getPassInfo(StringRef Arg) const {
@@ -106,9 +110,16 @@ const PassInfo *PassRegistry::getPassInfo(StringRef Arg) const {
 void PassRegistry::registerPass(const PassInfo &PI, bool ShouldFree) {
   sys::SmartScopedWriter<true> Guard(*Lock);
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
-  bool Inserted =
-    Impl->PassInfoMap.insert(std::make_pair(PI.getTypeInfo(),&PI)).second;
-  assert(Inserted && "Pass registered multiple times!");
+  bool Inserted = false;
+  if (!llvm_is_multithreaded()) {
+    Inserted =
+      Impl->PassInfoMap.insert(std::make_pair(PI.getTypeInfo(),&PI)).second;
+    assert(Inserted && "Pass registered multiple times!");
+  } else {
+    Inserted =
+      Impl->PassInfoMapShared.insert(std::make_pair(PI.getTypeInfo(),&PI)).second;
+    assert(Inserted && "Pass registered multiple times!");
+  }
   (void)Inserted;
   Impl->PassInfoStringMap[PI.getPassArgument()] = &PI;
   
@@ -125,10 +136,15 @@ void PassRegistry::unregisterPass(const PassInfo &PI) {
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
   PassRegistryImpl::MapType::iterator I = 
     Impl->PassInfoMap.find(PI.getTypeInfo());
-  assert(I != Impl->PassInfoMap.end() && "Pass registered but not in map!");
+  if (I != Impl->PassInfoMap.end()) {
+	I = Impl->PassInfoMapShared.find(PI.getTypeInfo());
+    assert(I != Impl->PassInfoMapShared.end() && "Pass registered but not in map!");
+    Impl->PassInfoMapShared.erase(I);
+  } else {
+    Impl->PassInfoMap.erase(I);
+  }
   
   // Remove pass from the map.
-  Impl->PassInfoMap.erase(I);
   Impl->PassInfoStringMap.erase(PI.getPassArgument());
 }
 
@@ -137,6 +153,10 @@ void PassRegistry::enumerateWith(PassRegistrationListener *L) {
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
   for (PassRegistryImpl::MapType::const_iterator I = Impl->PassInfoMap.begin(),
        E = Impl->PassInfoMap.end(); I != E; ++I)
+    L->passEnumerate(I->second);
+
+  for (PassRegistryImpl::MapType::const_iterator I = Impl->PassInfoMapShared.begin(),
+       E = Impl->PassInfoMapShared.end(); I != E; ++I)
     L->passEnumerate(I->second);
 }
 

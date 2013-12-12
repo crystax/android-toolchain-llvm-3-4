@@ -132,17 +132,11 @@ private:
   void setPrev(Use **NewPrev) {
     Prev.setPointer(NewPrev);
   }
-  void addToList(Use **List) {
-    Next = *List;
-    if (Next) Next->setPrev(&Next);
-    setPrev(List);
-    *List = this;
-  }
-  void removeFromList() {
-    Use **StrippedPrev = Prev.getPointer();
-    *StrippedPrev = Next;
-    if (Next) Next->setPrev(StrippedPrev);
-  }
+  void addToList(Use **List);
+  void removeFromList();
+
+  void addToListInternal(Use **List);
+  void removeFromListInternal();
 
   friend class Value;
 };

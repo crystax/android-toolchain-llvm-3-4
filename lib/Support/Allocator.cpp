@@ -24,7 +24,9 @@ namespace llvm {
 BumpPtrAllocator::BumpPtrAllocator(size_t size, size_t threshold,
                                    SlabAllocator &allocator)
     : SlabSize(size), SizeThreshold(std::min(size, threshold)),
-      Allocator(allocator), CurSlab(0), BytesAllocated(0) { }
+      Allocator(allocator), CurSlab(0), BytesAllocated(0) {
+  share = (&allocator == &DefaultSlabAllocator);
+}
 
 BumpPtrAllocator::BumpPtrAllocator(size_t size, size_t threshold)
     : SlabSize(size), SizeThreshold(std::min(size, threshold)),
@@ -54,8 +56,13 @@ void BumpPtrAllocator::StartNewSlab() {
   // overhead. The factors are chosen conservatively to avoid overallocation.
   if (BytesAllocated >= SlabSize * 128)
     SlabSize *= 2;
-
-  MemSlab *NewSlab = Allocator.Allocate(SlabSize);
+  MemSlab *NewSlab;
+  if (share) {
+    sys::CondScopedLock locked(mutexAllocator);
+    NewSlab = Allocator.Allocate(SlabSize);
+  } else {
+    NewSlab = Allocator.Allocate(SlabSize);
+  }
   NewSlab->NextPtr = CurSlab;
   CurSlab = NewSlab;
   CurPtr = (char*)(CurSlab + 1);
@@ -73,7 +80,12 @@ void BumpPtrAllocator::DeallocateSlabs(MemSlab *Slab) {
     sys::Memory::setRangeWritable(Slab + 1, Slab->Size - sizeof(MemSlab));
     memset(Slab + 1, 0xCD, Slab->Size - sizeof(MemSlab));
 #endif
-    Allocator.Deallocate(Slab);
+    if (share) {
+      sys::CondScopedLock locked(mutexAllocator);
+      Allocator.Deallocate(Slab);
+    } else {
+      Allocator.Deallocate(Slab);
+    }
     Slab = NextSlab;
   }
 }
@@ -118,8 +130,13 @@ void *BumpPtrAllocator::Allocate(size_t Size, size_t Alignment) {
   // If Size is really big, allocate a separate slab for it.
   size_t PaddedSize = Size + sizeof(MemSlab) + Alignment - 1;
   if (PaddedSize > SizeThreshold) {
-    MemSlab *NewSlab = Allocator.Allocate(PaddedSize);
-
+    MemSlab *NewSlab;
+    if (share) {
+      sys::CondScopedLock locked(mutexAllocator);
+      NewSlab = Allocator.Allocate(PaddedSize);
+    } else {
+      NewSlab = Allocator.Allocate(PaddedSize);
+    }
     // Put the new slab after the current slab, since we are not allocating
     // into it.
     NewSlab->NextPtr = CurSlab->NextPtr;
@@ -170,6 +187,8 @@ void BumpPtrAllocator::PrintStats() const {
          << "Bytes wasted: " << (TotalMemory - BytesAllocated)
          << " (includes alignment, etc)\n";
 }
+
+sys::CondSmartMutex BumpPtrAllocator::mutexAllocator;
 
 SlabAllocator::~SlabAllocator() { }
 

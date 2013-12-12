@@ -66,6 +66,9 @@ void TargetLoweringObjectFileELF::emitPersonalityValue(MCStreamer &Streamer,
   SmallString<64> NameData("DW.ref.");
   NameData += Sym->getName();
   MCSymbol *Label = getContext().GetOrCreateSymbol(NameData);
+  if (Label->isDefined()) {
+    return;
+  }
   Streamer.EmitSymbolAttribute(Label, MCSA_Hidden);
   Streamer.EmitSymbolAttribute(Label, MCSA_Weak);
   StringRef Prefix = ".data.";

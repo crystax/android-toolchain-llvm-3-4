@@ -92,6 +92,11 @@ public:
   void emitError(const Instruction *I, const Twine &ErrorStr);
   void emitError(const Twine &ErrorStr);
 
+  /// this is used to number global value
+private:
+  int GVNumber;
+public:
+  int GVCounter() { return GVNumber++; }
 private:
   LLVMContext(LLVMContext&) LLVM_DELETED_FUNCTION;
   void operator=(LLVMContext&) LLVM_DELETED_FUNCTION;

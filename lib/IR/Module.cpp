@@ -125,7 +125,15 @@ void Module::getMDKindNames(SmallVectorImpl<StringRef> &Result) const {
   return Context.getMDKindNames(Result);
 }
 
-
+Constant *Module::getOrInsertFunction(StringRef Name,
+                                      FunctionType *Ty,
+                                      AttributeSet AttributeList, bool needLock) {
+  if (needLock) {
+    sys::CondScopedLock locked(mutexFunctions);
+    return getOrInsertFunctionInternal(Name, Ty, AttributeList);
+  }
+  return getOrInsertFunctionInternal(Name, Ty, AttributeList);
+}
 //===----------------------------------------------------------------------===//
 // Methods for easy access to the functions in the module.
 //
@@ -135,7 +143,7 @@ void Module::getMDKindNames(SmallVectorImpl<StringRef> &Result) const {
 // it.  This is nice because it allows most passes to get away with not handling
 // the symbol table directly for this common task.
 //
-Constant *Module::getOrInsertFunction(StringRef Name,
+Constant *Module::getOrInsertFunctionInternal(StringRef Name,
                                       FunctionType *Ty,
                                       AttributeSet AttributeList) {
   // See if we have a definition for the specified function already.
@@ -154,7 +162,7 @@ Constant *Module::getOrInsertFunction(StringRef Name,
     // Clear the function's name.
     F->setName("");
     // Retry, now there won't be a conflict.
-    Constant *NewF = getOrInsertFunction(Name, Ty);
+    Constant *NewF = getOrInsertFunctionInternal(Name, Ty, AttributeSet());
     F->setName(Name);
     return NewF;
   }
@@ -248,6 +256,7 @@ GlobalVariable *Module::getGlobalVariable(StringRef Name, bool AllowLocal) {
 ///   3. Finally, if the existing global is the correct declaration, return the
 ///      existing global.
 Constant *Module::getOrInsertGlobal(StringRef Name, Type *Ty) {
+  sys::CondScopedLock locked(mutexGV);
   // See if we have a definition for the specified global already.
   GlobalVariable *GV = dyn_cast_or_null<GlobalVariable>(getNamedValue(Name));
   if (GV == 0) {

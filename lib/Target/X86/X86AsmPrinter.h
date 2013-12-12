@@ -79,7 +79,7 @@ class LLVM_LIBRARY_VISIBILITY X86AsmPrinter : public AsmPrinter {
                               raw_ostream &O, const char *Modifier=NULL,
                               unsigned AsmVariant = 1);
 
-  virtual bool runOnMachineFunction(MachineFunction &F) LLVM_OVERRIDE;
+  virtual bool delegateRunOnMachineFunctionFor(MachineFunction &F, AsmPrinter *childAsm) LLVM_OVERRIDE;
 };
 
 } // end namespace llvm

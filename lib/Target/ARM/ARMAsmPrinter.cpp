@@ -154,14 +154,19 @@ void ARMAsmPrinter::EmitXXStructor(const Constant *CV) {
   OutStreamer.EmitValue(E, Size);
 }
 
-/// runOnMachineFunction - This uses the EmitInstruction()
-/// method to print assembly for each instruction.
-///
-bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+static sys::CondSmartMutex armAsmPrinterMutex;
+/// help another asmPrinter to execute runOnMachineFunction on delegation
+bool ARMAsmPrinter::delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm) {
+  sys::CondScopedLock locked(armAsmPrinterMutex);
+
+  if (llvm_is_multithreaded()) {
+    OutStreamer.setCurrFunc(MF.getFunctionNumber());
+  }
+
   AFI = MF.getInfo<ARMFunctionInfo>();
   MCP = MF.getConstantPool();
 
-  return AsmPrinter::runOnMachineFunction(MF);
+  return AsmPrinter::delegateRunOnMachineFunctionFor(MF, childAsm);
 }
 
 void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
@@ -524,6 +529,9 @@ void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
       OutStreamer.SwitchSection(TLOFMacho.getNonLazySymbolPointerSection());
       EmitAlignment(2);
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         // L_foo$stub:
         OutStreamer.EmitLabel(Stubs[i].first);
         //   .indirect_symbol _foo
@@ -554,6 +562,9 @@ void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
       OutStreamer.SwitchSection(getObjFileLowering().getDataSection());
       EmitAlignment(2);
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         // L_foo$stub:
         OutStreamer.EmitLabel(Stubs[i].first);
         //   .long _foo

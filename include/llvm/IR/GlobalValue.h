@@ -20,6 +20,8 @@
 
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/LLVMContext.h"
 
 namespace llvm {
 
@@ -54,12 +56,24 @@ public:
     HiddenVisibility,       ///< The GV is hidden
     ProtectedVisibility     ///< The GV is protected
   };
+  /// For global value, especially for function mangling, it is numbered
+  /// sequentially when emitting binary code, (__unnamed_XXX) but in parallel
+  /// compilation, the number for function will be a random value, here to give
+  /// function a fixed number at the beginning so mangling can output stable
+  /// symbol for function function numbering won't affect the code generation,
+  /// it is just an ID to make mangling output same symbols for function in
+  /// each compilation
+private:
+  int GVID;
+public:
+  int getGVID() const { return GVID; }
 
 protected:
   GlobalValue(Type *ty, ValueTy vty, Use *Ops, unsigned NumOps,
               LinkageTypes linkage, const Twine &Name)
     : Constant(ty, vty, Ops, NumOps), Linkage(linkage),
       Visibility(DefaultVisibility), Alignment(0), UnnamedAddr(0), Parent(0) {
+    GVID = ty->getContext().GVCounter();
     setName(Name);
   }
 

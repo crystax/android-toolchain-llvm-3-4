@@ -102,6 +102,37 @@ void llvm::llvm_execute_on_thread(void (*Fn)(void*), void *UserData,
  error:
   ::pthread_attr_destroy(&Attr);
 }
+
+void llvm::llvm_execute_on_multi_threads(void (*Fn)(void*), void **UserData,
+                                         unsigned threads, unsigned RequestedStackSize) {
+  pthread_attr_t Attr;
+  // Construct the attributes object.
+  if (::pthread_attr_init(&Attr) != 0)
+    return;
+
+  pthread_t *Thread = new pthread_t[threads];
+  ThreadInfo *param = new ThreadInfo[threads];
+  // Set the requested stack size, if given.
+  if (RequestedStackSize != 0) {
+    if (::pthread_attr_setstacksize(&Attr, RequestedStackSize) != 0)
+      goto error;
+  }
+  for (unsigned thd = 0; thd < threads; thd++) {
+    // Construct and execute the thread.
+    ThreadInfo temp = { Fn, UserData[thd] };
+    param[thd] = temp;
+    if (::pthread_create(&Thread[thd], &Attr, ExecuteOnThread_Dispatch, &param[thd]) != 0)
+      goto error;
+  }
+  for (unsigned thd = 0; thd < threads; thd++) {
+    // Wait for the thread and clean up.
+    ::pthread_join(Thread[thd], 0);
+  }
+  delete[] Thread;
+  delete[] param;
+ error:
+  ::pthread_attr_destroy(&Attr);
+}
 #elif LLVM_ENABLE_THREADS!=0 && defined(LLVM_ON_WIN32)
 #include "Windows/Windows.h"
 #include <process.h>
@@ -136,6 +167,32 @@ void llvm::llvm_execute_on_thread(void (*Fn)(void*), void *UserData,
     ::CloseHandle(hThread);
   }
 }
+
+void llvm::llvm_execute_on_multi_threads(void (*Fn)(void*), void **UserData,
+                                         unsigned threads, unsigned RequestedStackSize) {
+  HANDLE *hThread = new HANDLE[threads];
+  ThreadInfo *param = new ThreadInfo[threads];
+  for (unsigned thd = 0; thd < threads; thd++) {
+    ThreadInfo temp = { Fn, UserData[thd] };
+    param[thd] = temp;
+    hThread[thd] = (HANDLE)::_beginthreadex(NULL,
+                                            RequestedStackSize, ThreadCallback,
+                                            &param[thd], 0, NULL);
+  }
+  for (unsigned thd = 0; thd < threads; thd++) {
+    if (hThread[thd]) {
+      // We actually don't care whether the wait succeeds or fails, in
+      // the same way we don't care whether the pthread_join call succeeds
+      // or fails.  There's not much we could do if this were to fail. But
+      // on success, this call will wait until the thread finishes executing
+      // before returning.
+      (void)::WaitForSingleObject(hThread[thd], INFINITE);
+      ::CloseHandle(hThread[thd]);
+    }
+  }
+  delete[] param;
+  delete[] hThread;
+}
 #else
 // Support for non-Win32, non-pthread implementation.
 void llvm::llvm_execute_on_thread(void (*Fn)(void*), void *UserData,
@@ -144,4 +201,11 @@ void llvm::llvm_execute_on_thread(void (*Fn)(void*), void *UserData,
   Fn(UserData);
 }
 
+void llvm::llvm_execute_on_multi_threads(void (*Fn)(void*), void **UserData, unsigned threads,
+                                         unsigned RequestedStackSize) {
+  for (unsigned thd = 0; thd < threads; thd++) {
+    (void) RequestedStackSize;
+    Fn(UserData[thd]);
+  }
+}
 #endif

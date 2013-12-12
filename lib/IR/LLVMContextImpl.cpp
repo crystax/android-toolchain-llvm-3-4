@@ -88,6 +88,7 @@ LLVMContextImpl::~LLVMContextImpl() {
   DeleteContainerSeconds(UVConstants);
   InlineAsms.freeConstants();
   DeleteContainerSeconds(IntConstants);
+  DeleteContainerSeconds(IntConstantsShared);
   DeleteContainerSeconds(FPConstants);
   
   for (StringMap<ConstantDataSequential*>::iterator I = CDSConstants.begin(),

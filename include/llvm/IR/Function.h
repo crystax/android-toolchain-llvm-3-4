@@ -123,7 +123,15 @@ private:
   ///
   Function(FunctionType *Ty, LinkageTypes Linkage,
            const Twine &N = "", Module *M = 0);
-
+  /// Each function has a sequential number,
+  /// in single thread, this field is not necessary, but in parallel compilation
+  /// to make generated code stable, this seq number will be used to sort generrated code.
+  /// it is just used to make generated code stable and facilitate validation in parallel compilation
+private:
+  int seq;
+public:
+  int getSeq() const { return seq; }
+  void setSeq(int num) { seq = num; }
 public:
   static Function *Create(FunctionType *Ty, LinkageTypes Linkage,
                           const Twine &N = "", Module *M = 0) {

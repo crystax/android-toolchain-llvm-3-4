@@ -48,9 +48,19 @@ using namespace llvm;
 
 /// runOnMachineFunction - Emit the function body.
 ///
-bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
-  SetupMachineFunction(MF);
 
+static sys::CondSmartMutex asmX86PrinterMutex;
+
+/// Method to help another asmPrinter to execute runOnMachineFunction on delegation
+bool X86AsmPrinter::delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm) {
+  sys::CondScopedLock locked(asmX86PrinterMutex);
+  if (llvm_is_multithreaded()) {
+    OutStreamer.setCurrFunc(MF.getFunctionNumber());
+  }
+
+  SetupMachineFunction(MF, childAsm);
+
+  SwapContextWith(childAsm);
   if (Subtarget->isTargetCOFF() && !Subtarget->isTargetEnvMacho()) {
     bool Intrn = MF.getFunction()->hasInternalLinkage();
     OutStreamer.BeginCOFFSymbolDef(CurrentFnSym);
@@ -67,6 +77,7 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   // Emit the rest of the function body.
   EmitFunctionBody();
 
+  SwapContextWith(childAsm);
   // We didn't modify anything.
   return false;
 }
@@ -563,6 +574,9 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
       OutStreamer.SwitchSection(TheSection);
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         // L_foo$stub:
         OutStreamer.EmitLabel(Stubs[i].first);
         //   .indirect_symbol _foo
@@ -587,6 +601,9 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
       OutStreamer.SwitchSection(TheSection);
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         // L_foo$non_lazy_ptr:
         OutStreamer.EmitLabel(Stubs[i].first);
         // .indirect_symbol _foo
@@ -617,6 +634,9 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
       EmitAlignment(2);
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         // L_foo$non_lazy_ptr:
         OutStreamer.EmitLabel(Stubs[i].first);
         // .long _foo
@@ -717,6 +737,9 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
       const DataLayout *TD = TM.getDataLayout();
 
       for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        if (Stubs[i].first->isDefined()) {
+          continue;
+        }
         OutStreamer.EmitLabel(Stubs[i].first);
         OutStreamer.EmitSymbolValue(Stubs[i].second.getPointer(),
                                     TD->getPointerSize());

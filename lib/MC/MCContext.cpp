@@ -36,11 +36,17 @@ typedef StringMap<const MCSectionMachO*> MachOUniqueMapTy;
 typedef std::map<SectionGroupPair, const MCSectionELF *> ELFUniqueMapTy;
 typedef std::map<SectionGroupPair, const MCSectionCOFF *> COFFUniqueMapTy;
 
+//Symbols, UsedNames, NextUniqueID;
+sys::CondSmartMutex mutexSymbols;
+sys::CondSmartMutex mutexUsedNames;
+sys::CondSmartMutex mutexNextUniqueID;
+sys::CondSmartMutex mutexAllocator;
+
 MCContext::MCContext(const MCAsmInfo *mai, const MCRegisterInfo *mri,
                      const MCObjectFileInfo *mofi, const SourceMgr *mgr,
                      bool DoAutoReset) :
-  SrcMgr(mgr), MAI(mai), MRI(mri), MOFI(mofi),
-  Allocator(), Symbols(Allocator), UsedNames(Allocator),
+  pMCCtx(0), SrcMgr(mgr), MAI(mai), MRI(mri), MOFI(mofi),
+  Allocator(), AllocatorSyms(), AllocatorUNames(), Symbols(AllocatorSyms), UsedNames(AllocatorUNames),
   NextUniqueID(0),
   CurrentDwarfLoc(0,0,0,DWARF2_FLAG_IS_STMT,0,0), 
   DwarfLocSeen(false), GenDwarfForAssembly(false), GenDwarfFileNumber(0),
@@ -76,6 +82,11 @@ MCContext::~MCContext() {
   delete (raw_ostream*)SecureLog;
 }
 
+void *MCContext::Allocate(unsigned Size, unsigned Align) {
+  sys::CondScopedLock locked(mutexAllocator);
+  return Allocator.Allocate(Size, Align);
+}
+
 //===----------------------------------------------------------------------===//
 // Module Lifetime Management
 //===----------------------------------------------------------------------===//
@@ -84,6 +95,8 @@ void MCContext::reset() {
   UsedNames.clear();
   Symbols.clear();
   Allocator.Reset();
+  AllocatorSyms.Reset();
+  AllocatorUNames.Reset();
   Instances.clear();
   MCDwarfFilesCUMap.clear();
   MCDwarfDirsCUMap.clear();
@@ -119,7 +132,9 @@ MCSymbol *MCContext::GetOrCreateSymbol(StringRef Name) {
 
   // Do the lookup and get the entire StringMapEntry.  We want access to the
   // key if we are creating the entry.
-  StringMapEntry<MCSymbol*> &Entry = Symbols.GetOrCreateValue(Name);
+
+  sys::CondScopedLock locked(mutexSymbols);
+  StringMapEntry<MCSymbol*> &Entry = (pMCCtx ? pMCCtx->Symbols.GetOrCreateValue(Name) : Symbols.GetOrCreateValue(Name));
   MCSymbol *Sym = Entry.getValue();
 
   if (Sym)
@@ -136,17 +151,26 @@ MCSymbol *MCContext::CreateSymbol(StringRef Name) {
   if (AllowTemporaryLabels)
     isTemporary = Name.startswith(MAI->getPrivateGlobalPrefix());
 
-  StringMapEntry<bool> *NameEntry = &UsedNames.GetOrCreateValue(Name);
-  if (NameEntry->getValue()) {
-    assert(isTemporary && "Cannot rename non temporary symbols");
-    SmallString<128> NewName = Name;
-    do {
-      NewName.resize(Name.size());
-      raw_svector_ostream(NewName) << NextUniqueID++;
-      NameEntry = &UsedNames.GetOrCreateValue(NewName);
-    } while (NameEntry->getValue());
+  StringMapEntry<bool> *NameEntry;
+  {
+    sys::CondScopedLock locked(mutexUsedNames);
+    NameEntry = (pMCCtx ? &pMCCtx->UsedNames.GetOrCreateValue(Name) : &UsedNames.GetOrCreateValue(Name));
+    if (NameEntry->getValue()) {
+      assert(isTemporary && "Cannot rename non temporary symbols");
+      SmallString<128> NewName = Name;
+      do {
+        NewName.resize(Name.size());
+        int UID = 0;
+        {
+          sys::CondScopedLock locked(mutexNextUniqueID);
+          UID = pMCCtx ? pMCCtx->NextUniqueID++ : NextUniqueID++;
+        }
+        raw_svector_ostream(NewName) << UID;
+        NameEntry = (pMCCtx ? &pMCCtx->UsedNames.GetOrCreateValue(NewName) : &UsedNames.GetOrCreateValue(NewName));
+      } while (NameEntry->getValue());
+    }
+    NameEntry->setValue(true);
   }
-  NameEntry->setValue(true);
 
   // Ok, the entry doesn't already exist.  Have the MCSymbol object itself refer
   // to the copy of the string that is embedded in the UsedNames entry.
@@ -161,10 +185,24 @@ MCSymbol *MCContext::GetOrCreateSymbol(const Twine &Name) {
   return GetOrCreateSymbol(NameSV.str());
 }
 
+unsigned MCContext::getUniqueSymbolID() {
+  int UID = 0;
+  {
+    sys::CondScopedLock locked(mutexNextUniqueID);
+    UID = pMCCtx ? pMCCtx->NextUniqueID++ : NextUniqueID++;
+  }
+  return UID;
+}
+
 MCSymbol *MCContext::CreateTempSymbol() {
   SmallString<128> NameSV;
+  int UID = 0;
+  {
+    sys::CondScopedLock locked(mutexNextUniqueID);
+    UID = pMCCtx ? pMCCtx->NextUniqueID++ : NextUniqueID++;
+  }
   raw_svector_ostream(NameSV)
-    << MAI->getPrivateGlobalPrefix() << "tmp" << NextUniqueID++;
+    << MAI->getPrivateGlobalPrefix() << "tmp" << UID;
   return CreateSymbol(NameSV);
 }
 
@@ -197,7 +235,8 @@ MCSymbol *MCContext::GetDirectionalLocalSymbol(int64_t LocalLabelVal,
 }
 
 MCSymbol *MCContext::LookupSymbol(StringRef Name) const {
-  return Symbols.lookup(Name);
+  sys::CondScopedLock locked(mutexSymbols);
+  return (pMCCtx ? pMCCtx->Symbols.lookup(Name) : Symbols.lookup(Name));
 }
 
 MCSymbol *MCContext::LookupSymbol(const Twine &Name) const {
@@ -220,9 +259,10 @@ getMachOSection(StringRef Segment, StringRef Section,
   // diagnosed by the client as an error.
 
   // Create the map if it doesn't already exist.
-  if (MachOUniquingMap == 0)
-    MachOUniquingMap = new MachOUniqueMapTy();
-  MachOUniqueMapTy &Map = *(MachOUniqueMapTy*)MachOUniquingMap;
+  void *&SectMap = pMCCtx ? pMCCtx->MachOUniquingMap : MachOUniquingMap;
+  if (SectMap == 0)
+    SectMap = new MachOUniqueMapTy();
+  MachOUniqueMapTy &Map = *(MachOUniqueMapTy*)SectMap;
 
   // Form the name to look up.
   SmallString<64> Name;
@@ -248,9 +288,10 @@ getELFSection(StringRef Section, unsigned Type, unsigned Flags,
 const MCSectionELF *MCContext::
 getELFSection(StringRef Section, unsigned Type, unsigned Flags,
               SectionKind Kind, unsigned EntrySize, StringRef Group) {
-  if (ELFUniquingMap == 0)
-    ELFUniquingMap = new ELFUniqueMapTy();
-  ELFUniqueMapTy &Map = *(ELFUniqueMapTy*)ELFUniquingMap;
+  void *&SectMap = pMCCtx ? pMCCtx->ELFUniquingMap : ELFUniquingMap;
+  if (SectMap == 0)
+    SectMap = new ELFUniqueMapTy();
+  ELFUniqueMapTy &Map = *(ELFUniqueMapTy*)SectMap;
 
   // Do the lookup, if we have a hit, return it.
   std::pair<ELFUniqueMapTy::iterator, bool> Entry = Map.insert(
@@ -283,9 +324,10 @@ const MCSectionCOFF *
 MCContext::getCOFFSection(StringRef Section, unsigned Characteristics,
                           SectionKind Kind, StringRef COMDATSymName,
                           int Selection, const MCSectionCOFF *Assoc) {
-  if (COFFUniquingMap == 0)
-    COFFUniquingMap = new COFFUniqueMapTy();
-  COFFUniqueMapTy &Map = *(COFFUniqueMapTy*)COFFUniquingMap;
+  void *&SectMap = pMCCtx ? pMCCtx->COFFUniquingMap : COFFUniquingMap;
+  if (SectMap == 0)
+    SectMap = new COFFUniqueMapTy();
+  COFFUniqueMapTy &Map = *(COFFUniqueMapTy*)SectMap;
 
   // Do the lookup, if we have a hit, return it.
 

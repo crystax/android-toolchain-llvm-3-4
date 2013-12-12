@@ -165,6 +165,8 @@ public:
   ///
   virtual void reset();
 
+  virtual void setCurrFunc(int func) {}
+ 
   MCContext &getContext() const { return Context; }
 
   MCTargetStreamer &getTargetStreamer() {

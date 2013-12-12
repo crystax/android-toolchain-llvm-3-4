@@ -85,12 +85,15 @@ class Pass {
   PassKind Kind;
   void operator=(const Pass&) LLVM_DELETED_FUNCTION;
   Pass(const Pass &) LLVM_DELETED_FUNCTION;
-
+  /// In parallel compilation, each thread has its own passes, but the passes in the main thread
+  /// may have different behavior, the passes in the main thread are called parent pass
+protected:
+  Pass *pPass;
 public:
-  explicit Pass(PassKind K, char &pid) : Resolver(0), PassID(&pid), Kind(K) { }
+  explicit Pass(PassKind K, char &pid) : Resolver(0), PassID(&pid), Kind(K), pPass(0) { }
   virtual ~Pass();
 
-
+  void setParentPass(Pass *parent) { pPass = parent; }
   PassKind getPassKind() const { return Kind; }
 
   /// getPassName - Return a nice clean name for a pass.  This usually

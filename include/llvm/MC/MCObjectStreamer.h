@@ -51,7 +51,7 @@ protected:
 public:
   /// state management
   virtual void reset();
-
+  virtual void setCurrFunc(int func);
 protected:
   MCSectionData *getCurrentSectionData() const {
     return CurSectionData;
@@ -60,7 +60,8 @@ protected:
   MCFragment *getCurrentFragment() const;
 
   void insert(MCFragment *F) const {
-    CurSectionData->getFragmentList().insert(CurInsertionPoint, F);
+    CurSectionData->insertFrag(F);
+    //CurSectionData->getFragmentList().insert(CurInsertionPoint, F);
     F->setParent(CurSectionData);
   }
 

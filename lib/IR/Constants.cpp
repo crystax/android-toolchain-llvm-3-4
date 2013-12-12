@@ -437,6 +437,7 @@ ConstantInt::ConstantInt(IntegerType *Ty, const APInt& V)
 
 ConstantInt *ConstantInt::getTrue(LLVMContext &Context) {
   LLVMContextImpl *pImpl = Context.pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_TheTrueVal]);
   if (!pImpl->TheTrueVal)
     pImpl->TheTrueVal = ConstantInt::get(Type::getInt1Ty(Context), 1);
   return pImpl->TheTrueVal;
@@ -444,6 +445,7 @@ ConstantInt *ConstantInt::getTrue(LLVMContext &Context) {
 
 ConstantInt *ConstantInt::getFalse(LLVMContext &Context) {
   LLVMContextImpl *pImpl = Context.pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_TheFalseVal]);
   if (!pImpl->TheFalseVal)
     pImpl->TheFalseVal = ConstantInt::get(Type::getInt1Ty(Context), 0);
   return pImpl->TheFalseVal;
@@ -484,7 +486,20 @@ ConstantInt *ConstantInt::get(LLVMContext &Context, const APInt &V) {
   IntegerType *ITy = IntegerType::get(Context, V.getBitWidth());
   // get an existing value or the insertion position
   LLVMContextImpl *pImpl = Context.pImpl;
-  ConstantInt *&Slot = pImpl->IntConstants[DenseMapAPIntKeyInfo::KeyTy(V, ITy)];
+  DenseMapAPIntKeyInfo::KeyTy Key(V, ITy);
+
+  if (!llvm_is_multithreaded()) {
+    ConstantInt *&Slot = Context.pImpl->IntConstants[Key];
+    if (!Slot) Slot = new ConstantInt(ITy, V);
+    return Slot;
+  }
+  LLVMContextImpl::IntMapTy::iterator I = Context.pImpl->IntConstants.find_as(Key);
+  if (I != Context.pImpl->IntConstants.end()) {
+    return I->second;
+  }
+
+  sys::CondScopedLock lockedWrite(Context.pImpl->Mutex[LLVMContextImpl::MT_IntConstants]);
+  ConstantInt *&Slot = Context.pImpl->IntConstantsShared[Key];
   if (!Slot) Slot = new ConstantInt(ITy, V);
   return Slot;
 }
@@ -610,6 +625,7 @@ Constant *ConstantFP::getZeroValueForNegation(Type *Ty) {
 ConstantFP* ConstantFP::get(LLVMContext &Context, const APFloat& V) {
   LLVMContextImpl* pImpl = Context.pImpl;
 
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_FPConstants]);
   ConstantFP *&Slot = pImpl->FPConstants[DenseMapAPFloatKeyInfo::KeyTy(V)];
 
   if (!Slot) {
@@ -831,7 +847,7 @@ Constant *ConstantArray::get(ArrayType *Ty, ArrayRef<Constant*> V) {
       }
     }
   }
-
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ArrayConstants]);
   // Otherwise, we really do want to create a ConstantArray.
   return pImpl->ArrayConstants.getOrCreate(Ty, V);
 }
@@ -895,7 +911,7 @@ Constant *ConstantStruct::get(StructType *ST, ArrayRef<Constant*> V) {
     return ConstantAggregateZero::get(ST);
   if (isUndef)
     return UndefValue::get(ST);
-
+  sys::CondScopedLock locked(ST->getContext().pImpl->Mutex[LLVMContextImpl::MT_StructConstants]);
   return ST->getContext().pImpl->StructConstants.getOrCreate(ST, V);
 }
 
@@ -1012,7 +1028,7 @@ Constant *ConstantVector::get(ArrayRef<Constant*> V) {
       }
     }
   }
-
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_VectorConstants]);
   // Otherwise, the element type isn't compatible with ConstantDataVector, or
   // the operand list constants a ConstantExpr or something else strange.
   return pImpl->VectorConstants.getOrCreate(T, V);
@@ -1231,7 +1247,7 @@ bool ConstantFP::isValueValidForType(Type *Ty, const APFloat& Val) {
 ConstantAggregateZero *ConstantAggregateZero::get(Type *Ty) {
   assert((Ty->isStructTy() || Ty->isArrayTy() || Ty->isVectorTy()) &&
          "Cannot create an aggregate zero of non-aggregate type!");
-  
+  sys::CondScopedLock locked(Ty->getContext().pImpl->Mutex[LLVMContextImpl::MT_CAZConstants]);
   ConstantAggregateZero *&Entry = Ty->getContext().pImpl->CAZConstants[Ty];
   if (Entry == 0)
     Entry = new ConstantAggregateZero(Ty);
@@ -1242,14 +1258,20 @@ ConstantAggregateZero *ConstantAggregateZero::get(Type *Ty) {
 /// destroyConstant - Remove the constant from the constant table.
 ///
 void ConstantAggregateZero::destroyConstant() {
-  getContext().pImpl->CAZConstants.erase(getType());
+  {
+    sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_CAZConstants]);
+    getContext().pImpl->CAZConstants.erase(getType());
+  }
   destroyConstantImpl();
 }
 
 /// destroyConstant - Remove the constant from the constant table...
 ///
 void ConstantArray::destroyConstant() {
-  getType()->getContext().pImpl->ArrayConstants.remove(this);
+  {
+    sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_ArrayConstants]);
+    getType()->getContext().pImpl->ArrayConstants.remove(this);
+  }
   destroyConstantImpl();
 }
 
@@ -1260,14 +1282,20 @@ void ConstantArray::destroyConstant() {
 // destroyConstant - Remove the constant from the constant table...
 //
 void ConstantStruct::destroyConstant() {
-  getType()->getContext().pImpl->StructConstants.remove(this);
+  {
+    sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_StructConstants]);
+    getType()->getContext().pImpl->StructConstants.remove(this);
+  }
   destroyConstantImpl();
 }
 
 // destroyConstant - Remove the constant from the constant table...
 //
 void ConstantVector::destroyConstant() {
-  getType()->getContext().pImpl->VectorConstants.remove(this);
+  {
+    sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_VectorConstants]);
+    getType()->getContext().pImpl->VectorConstants.remove(this);
+  }
   destroyConstantImpl();
 }
 
@@ -1312,6 +1340,7 @@ const APInt &Constant::getUniqueInteger() const {
 //
 
 ConstantPointerNull *ConstantPointerNull::get(PointerType *Ty) {
+  sys::CondScopedLock locked(Ty->getContext().pImpl->Mutex[LLVMContextImpl::MT_CPNConstants]);
   ConstantPointerNull *&Entry = Ty->getContext().pImpl->CPNConstants[Ty];
   if (Entry == 0)
     Entry = new ConstantPointerNull(Ty);
@@ -1322,7 +1351,10 @@ ConstantPointerNull *ConstantPointerNull::get(PointerType *Ty) {
 // destroyConstant - Remove the constant from the constant table...
 //
 void ConstantPointerNull::destroyConstant() {
-  getContext().pImpl->CPNConstants.erase(getType());
+  {
+    sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_CPNConstants]);
+    getContext().pImpl->CPNConstants.erase(getType());
+  }
   // Free the constant and any dangling references to it.
   destroyConstantImpl();
 }
@@ -1332,6 +1364,7 @@ void ConstantPointerNull::destroyConstant() {
 //
 
 UndefValue *UndefValue::get(Type *Ty) {
+  sys::CondScopedLock locked(Ty->getContext().pImpl->Mutex[LLVMContextImpl::MT_UVConstants]);
   UndefValue *&Entry = Ty->getContext().pImpl->UVConstants[Ty];
   if (Entry == 0)
     Entry = new UndefValue(Ty);
@@ -1342,8 +1375,11 @@ UndefValue *UndefValue::get(Type *Ty) {
 // destroyConstant - Remove the constant from the constant table.
 //
 void UndefValue::destroyConstant() {
-  // Free the constant and any dangling references to it.
-  getContext().pImpl->UVConstants.erase(getType());
+  {
+    sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_UVConstants]);
+    // Free the constant and any dangling references to it.
+    getContext().pImpl->UVConstants.erase(getType());
+  }
   destroyConstantImpl();
 }
 
@@ -1356,6 +1392,7 @@ BlockAddress *BlockAddress::get(BasicBlock *BB) {
 }
 
 BlockAddress *BlockAddress::get(Function *F, BasicBlock *BB) {
+  sys::CondScopedLock locked(F->getContext().pImpl->Mutex[LLVMContextImpl::MT_BlockAddresses]);
   BlockAddress *&BA =
     F->getContext().pImpl->BlockAddresses[std::make_pair(F, BB)];
   if (BA == 0)
@@ -1377,8 +1414,11 @@ BlockAddress::BlockAddress(Function *F, BasicBlock *BB)
 // destroyConstant - Remove the constant from the constant table.
 //
 void BlockAddress::destroyConstant() {
-  getFunction()->getType()->getContext().pImpl
-    ->BlockAddresses.erase(std::make_pair(getFunction(), getBasicBlock()));
+  {
+    sys::CondScopedLock locked(getFunction()->getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_BlockAddresses]);
+    getFunction()->getType()->getContext().pImpl
+      ->BlockAddresses.erase(std::make_pair(getFunction(), getBasicBlock()));
+  }
   getBasicBlock()->AdjustBlockAddressRefCount(-1);
   destroyConstantImpl();
 }
@@ -1396,6 +1436,7 @@ void BlockAddress::replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U) {
 
   // See if the 'new' entry already exists, if not, just update this in place
   // and return early.
+  sys::CondScopedLock locked(getContext().pImpl->Mutex[LLVMContextImpl::MT_BlockAddresses]);
   BlockAddress *&NewBA =
     getContext().pImpl->BlockAddresses[std::make_pair(NewF, NewBB)];
   if (NewBA == 0) {
@@ -1438,6 +1479,7 @@ static inline Constant *getFoldedCast(
   // Look up the constant in the table first to ensure uniqueness.
   ExprMapKeyType Key(opc, C);
 
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(Ty, Key);
 }
 
@@ -1761,6 +1803,7 @@ Constant *ConstantExpr::get(unsigned Opcode, Constant *C1, Constant *C2,
   ExprMapKeyType Key(Opcode, ArgVec, 0, Flags);
 
   LLVMContextImpl *pImpl = C1->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(C1->getType(), Key);
 }
 
@@ -1838,6 +1881,7 @@ Constant *ConstantExpr::getSelect(Constant *C, Constant *V1, Constant *V2) {
   ExprMapKeyType Key(Instruction::Select, ArgVec);
 
   LLVMContextImpl *pImpl = C->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(V1->getType(), Key);
 }
 
@@ -1874,6 +1918,7 @@ Constant *ConstantExpr::getGetElementPtr(Constant *C, ArrayRef<Value *> Idxs,
                            InBounds ? GEPOperator::IsInBounds : 0);
 
   LLVMContextImpl *pImpl = C->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(ReqTy, Key);
 }
 
@@ -1896,6 +1941,7 @@ ConstantExpr::getICmp(unsigned short pred, Constant *LHS, Constant *RHS) {
     ResultTy = VectorType::get(ResultTy, VT->getNumElements());
 
   LLVMContextImpl *pImpl = LHS->getType()->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(ResultTy, Key);
 }
 
@@ -1917,6 +1963,7 @@ ConstantExpr::getFCmp(unsigned short pred, Constant *LHS, Constant *RHS) {
     ResultTy = VectorType::get(ResultTy, VT->getNumElements());
 
   LLVMContextImpl *pImpl = LHS->getType()->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(ResultTy, Key);
 }
 
@@ -1935,6 +1982,7 @@ Constant *ConstantExpr::getExtractElement(Constant *Val, Constant *Idx) {
 
   LLVMContextImpl *pImpl = Val->getContext().pImpl;
   Type *ReqTy = Val->getType()->getVectorElementType();
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(ReqTy, Key);
 }
 
@@ -1954,6 +2002,7 @@ Constant *ConstantExpr::getInsertElement(Constant *Val, Constant *Elt,
   const ExprMapKeyType Key(Instruction::InsertElement, ArgVec);
 
   LLVMContextImpl *pImpl = Val->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(Val->getType(), Key);
 }
 
@@ -1974,6 +2023,7 @@ Constant *ConstantExpr::getShuffleVector(Constant *V1, Constant *V2,
   const ExprMapKeyType Key(Instruction::ShuffleVector, ArgVec);
 
   LLVMContextImpl *pImpl = ShufTy->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
   return pImpl->ExprConstants.getOrCreate(ShufTy, Key);
 }
 
@@ -2169,7 +2219,10 @@ Constant *ConstantExpr::getBinOpAbsorber(unsigned Opcode, Type *Ty) {
 // destroyConstant - Remove the constant from the constant table...
 //
 void ConstantExpr::destroyConstant() {
-  getType()->getContext().pImpl->ExprConstants.remove(this);
+  {
+    sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_ExprConstants]);
+    getType()->getContext().pImpl->ExprConstants.remove(this);
+  }
   destroyConstantImpl();
 }
 
@@ -2263,6 +2316,8 @@ Constant *ConstantDataSequential::getImpl(StringRef Elements, Type *Ty) {
   if (isAllZeros(Elements))
     return ConstantAggregateZero::get(Ty);
 
+  sys::CondScopedLock locked(Ty->getContext().pImpl->Mutex[LLVMContextImpl::MT_CDSConstants]);
+
   // Do a lookup to see if we have already formed one of these.
   StringMap<ConstantDataSequential*>::MapEntryTy &Slot =
     Ty->getContext().pImpl->CDSConstants.GetOrCreateValue(Elements);
@@ -2287,6 +2342,7 @@ Constant *ConstantDataSequential::getImpl(StringRef Elements, Type *Ty) {
 }
 
 void ConstantDataSequential::destroyConstant() {
+  sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_CDSConstants]);
   // Remove the constant from the StringMap.
   StringMap<ConstantDataSequential*> &CDSConstants = 
     getType()->getContext().pImpl->CDSConstants;
@@ -2604,6 +2660,7 @@ void ConstantArray::replaceUsesOfWithOnConstant(Value *From, Value *To,
   } else {
     // Check to see if we have this array type already.
     Lookup.second = makeArrayRef(Values);
+    sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_ArrayConstants]);
     LLVMContextImpl::ArrayConstantsTy::MapTy::iterator I =
       pImpl->ArrayConstants.find(Lookup);
 
@@ -2690,6 +2747,7 @@ void ConstantStruct::replaceUsesOfWithOnConstant(Value *From, Value *To,
   } else {
     // Check to see if we have this struct type already.
     Lookup.second = makeArrayRef(Values);
+    sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_StructConstants]);
     LLVMContextImpl::StructConstantsTy::MapTy::iterator I =
       pImpl->StructConstants.find(Lookup);
 

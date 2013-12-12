@@ -54,6 +54,10 @@ namespace llvm {
   /// the thread stack.
   void llvm_execute_on_thread(void (*UserFn)(void*), void *UserData,
                               unsigned RequestedStackSize = 0);
+
+  /// Similar to llvm_execute_on_thread, but it starts N threads to execute same task
+  void llvm_execute_on_multi_threads(void (*UserFn)(void*), void **UserData,
+                                     unsigned threads, unsigned RequestedStackSize = 0);
 }
 
 #endif

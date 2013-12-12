@@ -209,6 +209,7 @@ private:
 
   friend class Constant;
 
+  sys::CondSmartMutex mutexFunctions, mutexGV;
 /// @}
 /// @name Constructors
 /// @{
@@ -320,8 +321,10 @@ public:
   ///      the existing function.
   ///   4. Finally, the function exists but has the wrong prototype: return the
   ///      function with a constantexpr cast to the right prototype.
-  Constant *getOrInsertFunction(StringRef Name, FunctionType *T,
+  Constant *getOrInsertFunctionInternal(StringRef Name, FunctionType *T,
                                 AttributeSet AttributeList);
+  Constant *getOrInsertFunction(StringRef Name, FunctionType *T,
+                                AttributeSet AttributeList, bool needLock = true);
 
   Constant *getOrInsertFunction(StringRef Name, FunctionType *T);
 

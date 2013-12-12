@@ -164,7 +164,12 @@ class MachineModuleInfo : public ImmutablePass {
   /// floating-point arguments.  This is used to emit an undefined reference
   /// to _fltused on Windows targets.
   bool UsesVAFloatArgument;
-
+  /// In parallel compilation, each thread has its own MMI, the main PM will
+  /// do some special job in AsmPrinter; the MMI in the main PM is call parent MMI.
+private:
+  MachineModuleInfo *pMMI;
+public:
+  void setParent(MachineModuleInfo *parent) { pMMI = parent; }
 public:
   static char ID; // Pass identification, replacement for typeid
 

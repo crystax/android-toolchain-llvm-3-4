@@ -57,6 +57,11 @@ public:
   /// implies that all passes MUST be allocated with 'new'.
   void add(Pass *P);
 
+  /// In parallel compilation, each thread has its own passes, but the passes in the main thread
+  /// may have different behavior, the passes in the main thread are called parent pass
+  /// other passes are children
+  void addChild(PassManager *child);
+
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool run(Module &M);

@@ -63,14 +63,18 @@ LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
   unsigned InvariantLdId = getMDKindID("invariant.load");
   assert(InvariantLdId == MD_invariant_load && "invariant.load kind id drifted");
   (void)InvariantLdId;
+
+  GVNumber = 1;
 }
 LLVMContext::~LLVMContext() { delete pImpl; }
 
 void LLVMContext::addModule(Module *M) {
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_OwnedModules]);
   pImpl->OwnedModules.insert(M);
 }
 
 void LLVMContext::removeModule(Module *M) {
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_OwnedModules]);
   pImpl->OwnedModules.erase(M);
 }
 
@@ -81,6 +85,7 @@ void LLVMContext::removeModule(Module *M) {
 void LLVMContext::
 setInlineAsmDiagnosticHandler(InlineAsmDiagHandlerTy DiagHandler,
                               void *DiagContext) {
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_DiagHandler]);
   pImpl->InlineAsmDiagHandler = DiagHandler;
   pImpl->InlineAsmDiagContext = DiagContext;
 }
@@ -113,6 +118,7 @@ void LLVMContext::emitError(const Instruction *I, const Twine &ErrorStr) {
 }
 
 void LLVMContext::emitError(unsigned LocCookie, const Twine &ErrorStr) {
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_DiagHandler]);
   // If there is no error handler installed, just print the error and exit.
   if (pImpl->InlineAsmDiagHandler == 0) {
     errs() << "error: " << ErrorStr << "\n";
@@ -151,7 +157,7 @@ static bool isValidName(StringRef MDName) {
 /// getMDKindID - Return a unique non-zero ID for the specified metadata kind.
 unsigned LLVMContext::getMDKindID(StringRef Name) const {
   assert(isValidName(Name) && "Invalid MDNode name");
-
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_CustomMDKindNames]);
   // If this is new, assign it its ID.
   return
     pImpl->CustomMDKindNames.GetOrCreateValue(
@@ -161,6 +167,7 @@ unsigned LLVMContext::getMDKindID(StringRef Name) const {
 /// getHandlerNames - Populate client supplied smallvector using custome
 /// metadata name and ID.
 void LLVMContext::getMDKindNames(SmallVectorImpl<StringRef> &Names) const {
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_CustomMDKindNames]);
   Names.resize(pImpl->CustomMDKindNames.size());
   for (StringMap<unsigned>::const_iterator I = pImpl->CustomMDKindNames.begin(),
        E = pImpl->CustomMDKindNames.end(); I != E; ++I)

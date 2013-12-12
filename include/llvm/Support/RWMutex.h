@@ -138,6 +138,7 @@ namespace llvm
       void operator=(const SmartRWMutex<mt_only> &);
     };
     typedef SmartRWMutex<false> RWMutex;
+    typedef SmartRWMutex<true> CondSmartRWMutex;
 
     /// ScopedReader - RAII acquisition of a reader lock
     template<bool mt_only>
@@ -153,6 +154,7 @@ namespace llvm
       }
     };
     typedef SmartScopedReader<false> ScopedReader;
+	typedef SmartScopedReader<true> CondScopedReader;
 
     /// ScopedWriter - RAII acquisition of a writer lock
     template<bool mt_only>
@@ -168,6 +170,7 @@ namespace llvm
       }
     };
     typedef SmartScopedWriter<false> ScopedWriter;
+	typedef SmartScopedWriter<true> CondScopedWriter;
   }
 }
 

@@ -126,6 +126,23 @@ public:
   void dump();
 };
 
+/// This is boundary tag for the fragments emitted by function
+/// parallel compilation will emit fragments in a disordered sequence
+/// This tag is used to re-layout fragments to generate stable binary in parallel compilation.
+class MCFnFragmentTag : public ilist_node<MCFnFragmentTag> {
+  int Seq;
+  MCFragment *end;
+public:
+  MCFnFragmentTag(int fn) : Seq(fn), end(0) {}
+  // Only for sentinel.
+  MCFnFragmentTag() : Seq(-1), end(0) {}
+  virtual ~MCFnFragmentTag() {}
+
+  int getSeq() { return Seq; }
+  MCFragment* getEnd() { return end; }
+  void setEnd(MCFragment *s) { end = s; }
+};
+
 /// Interface implemented by fragments that contain encoded instructions and/or
 /// data.
 ///
@@ -549,6 +566,7 @@ class MCSectionData : public ilist_node<MCSectionData> {
 
 public:
   typedef iplist<MCFragment> FragmentListType;
+  typedef iplist<MCFnFragmentTag> FragmentTagListType;
 
   typedef FragmentListType::const_iterator const_iterator;
   typedef FragmentListType::iterator iterator;
@@ -562,7 +580,27 @@ public:
     BundleLocked,
     BundleLockedAlignToEnd
   };
+
+public:
+  /// Set a boundary tag when a function has been finished.
+  void setFuncTag(int func);
+
+  MCFragment& getCurrFrag() { return *iterCurrFragment; }
+
+  int getCurrentFunc() { return lastFunc; }
+  /// For parallel compilation, push back can't push element into the end of section data
+  /// It should find the proper insertion point for a function first since function is not compiled in sequence.
+  void insertFrag(MCFragment *frag);
+
+  void setFirstFuncSeq(int n) { firstFuncSeq = n; }
+  int getFirstFuncSeq() { return firstFuncSeq; }
 private:
+  FragmentTagListType FragmentTags;
+  MCFnFragmentTag *CurrFnTag;
+  int elCount, lastFunc, firstFuncSeq;
+  MCAssembler *pMCA;
+  iterator iterCurrFragment;
+
   FragmentListType Fragments;
   const MCSection *Section;
 
@@ -890,6 +928,12 @@ private:
   // Access to the flags is necessary in cases where assembler directives affect
   // which flags to be set.
   unsigned ELFHeaderEFlags;
+  // The function ID which is emitting fragments
+  int curFunc;
+public:
+  int getCurrFunc() { return curFunc; }
+  void setCurrFunc(int n) { curFunc = n; }
+  void insertSD(MCSectionData *data);
 private:
   /// Evaluate a fixup to a relocatable expression and the value which should be
   /// placed into the fixup.
@@ -1136,9 +1180,20 @@ public:
     MCSectionData *&Entry = SectionMap[&Section];
 
     if (Created) *Created = !Entry;
-    if (!Entry)
+    if (!Entry) {
       Entry = new MCSectionData(Section, this);
-
+    } else {
+      int cur = this->getCurrFunc();
+      if (cur < Entry->getFirstFuncSeq()) {
+        Entry->setFirstFuncSeq(cur);
+        //re-sort section data
+        MCSectionData *prev = Entry->getPrevNode();
+        while (prev && cur < prev->getFirstFuncSeq()) {
+          Sections.insert(prev, Sections.remove(Entry));
+          prev = Entry->getPrevNode();
+        }
+      }
+    }
     return *Entry;
   }
 

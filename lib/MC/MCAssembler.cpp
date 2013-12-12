@@ -215,7 +215,7 @@ MCFragment::MCFragment(FragmentType _Kind, MCSectionData *_Parent)
   : Kind(_Kind), Parent(_Parent), Atom(0), Offset(~UINT64_C(0))
 {
   if (Parent)
-    Parent->getFragmentList().push_back(this);
+    Parent->insertFrag(this);
 }
 
 /* *** */
@@ -230,24 +230,38 @@ MCEncodedFragmentWithFixups::~MCEncodedFragmentWithFixups() {
 
 /* *** */
 
-MCSectionData::MCSectionData() : Section(0) {}
+MCSectionData::MCSectionData() :
+    CurrFnTag(0), elCount(0), lastFunc(-1), firstFuncSeq(-1), pMCA(NULL),
+    Section(0)
+{
+  iterCurrFragment = Fragments.begin();
+}
 
 MCSectionData::MCSectionData(const MCSection &_Section, MCAssembler *A)
-  : Section(&_Section),
+  : CurrFnTag(0), elCount(0), lastFunc(-1), firstFuncSeq(-1), pMCA(A),
+    Section(&_Section),
     Ordinal(~UINT32_C(0)),
     Alignment(1),
     BundleLockState(NotBundleLocked), BundleGroupBeforeFirstInst(false),
     HasInstructions(false)
 {
+  iterCurrFragment = Fragments.begin();
   if (A)
-    A->getSectionList().push_back(this);
+    A->insertSD(this);
 }
 
 MCSectionData::iterator
 MCSectionData::getSubsectionInsertionPoint(unsigned Subsection) {
-  if (Subsection == 0 && SubsectionFragmentMap.empty())
-    return end();
-
+  if (Subsection == 0 && SubsectionFragmentMap.empty()) {
+    iterator itRet;
+    if (iterCurrFragment == Fragments.begin()) {
+      itRet = end();
+    } else {
+      itRet = iterCurrFragment;
+      ++itRet;
+    }
+    return itRet;//return end();
+  }
   SmallVectorImpl<std::pair<unsigned, MCFragment *> >::iterator MI =
     std::lower_bound(SubsectionFragmentMap.begin(), SubsectionFragmentMap.end(),
                      std::make_pair(Subsection, (MCFragment *)0));
@@ -262,15 +276,67 @@ MCSectionData::getSubsectionInsertionPoint(unsigned Subsection) {
     IP = end();
   else
     IP = MI->second;
+
+  iterCurrFragment = IP;
+  if (IP != Fragments.begin()) {
+    --iterCurrFragment;
+  }
+
   if (!ExactMatch && Subsection != 0) {
     // The GNU as documentation claims that subsections have an alignment of 4,
     // although this appears not to be the case.
     MCFragment *F = new MCDataFragment();
     SubsectionFragmentMap.insert(MI, std::make_pair(Subsection, F));
-    getFragmentList().insert(IP, F);
+    insertFrag(F);//getFragmentList().insert(IP, F);
     F->setParent(this);
   }
   return IP;
+}
+
+void MCSectionData::setFuncTag(int func) {
+  CurrFnTag = new MCFnFragmentTag(func);
+  if (Fragments.empty()) {
+    CurrFnTag->setEnd(NULL);
+  } else {
+    CurrFnTag->setEnd(&(*iterCurrFragment));
+  }
+  FragmentTagListType::iterator it = FragmentTags.begin(), ie = FragmentTags.end();
+  for (; it != ie; ++it) {
+    if (func > it->getSeq()) {
+      break;
+    }
+  }
+  FragmentTags.insert(it, CurrFnTag);
+  elCount = 0;
+}
+
+void MCSectionData::insertFrag(MCFragment *frag) {
+  if (pMCA && lastFunc != pMCA->getCurrFunc()) {
+    /// A new function started, finish last function first
+    /// when func is -1, a boundary tag is created
+    if (lastFunc < 0 || elCount) {
+      setFuncTag(lastFunc);
+    }
+
+    lastFunc = pMCA->getCurrFunc();
+    elCount = 0;
+    //get the proper insert position for this function
+    FragmentTagListType::iterator it = FragmentTags.begin(), ie = FragmentTags.end();
+    for (; it != ie; ++it) {
+      if (lastFunc > it->getSeq()) {
+        break;
+      }
+    }
+    if (it->getEnd()) {
+      iterCurrFragment = iterator(it->getEnd());
+    } else {
+      iterCurrFragment = Fragments.insert(Fragments.begin(), frag);
+      elCount++;
+      return;
+    }
+  }
+  iterCurrFragment = Fragments.insertAfter(iterCurrFragment, frag);
+  elCount++;
 }
 
 /* *** */
@@ -295,7 +361,7 @@ MCAssembler::MCAssembler(MCContext &Context_, MCAsmBackend &Backend_,
                          raw_ostream &OS_)
   : Context(Context_), Backend(Backend_), Emitter(Emitter_), Writer(Writer_),
     OS(OS_), BundleAlignSize(0), RelaxAll(false), NoExecStack(false),
-    SubsectionsViaSymbols(false), ELFHeaderEFlags(0) {
+    SubsectionsViaSymbols(false), ELFHeaderEFlags(0), curFunc(-1) {
 }
 
 MCAssembler::~MCAssembler() {
@@ -318,6 +384,25 @@ void MCAssembler::reset() {
   getBackend().reset();
   getEmitter().reset();
   getWriter().reset();
+}
+
+void MCAssembler::insertSD(MCSectionData *data) {
+  data->setFirstFuncSeq(curFunc);
+  if (Sections.empty() || curFunc < 0) {
+    Sections.push_back(data);
+  } else {
+    iterator ins = Sections.back(), ie = Sections.begin();
+    for (; ins != ie; --ins) {
+      if (curFunc >= ins->getFirstFuncSeq()) {
+        break;
+      }
+    }
+    if (curFunc < ins->getFirstFuncSeq()) {
+      Sections.insert(ins, data);
+    } else {
+      Sections.insertAfter(ins, data);
+    }
+  }
 }
 
 bool MCAssembler::isSymbolLinkerVisible(const MCSymbol &Symbol) const {

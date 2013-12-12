@@ -46,6 +46,13 @@ namespace llvm {
   class MCContext {
     MCContext(const MCContext&) LLVM_DELETED_FUNCTION;
     MCContext &operator=(const MCContext&) LLVM_DELETED_FUNCTION;
+    /// In parallel compilation, some variables in MCContext should be shared
+    /// static variable is not introduced to make it compatible with single thread
+    /// There is one main/parent MCContext, all mutex-ed variables and operations are handled by this MCContext
+  private:
+    MCContext *pMCCtx;
+  public:
+    void setParent(MCContext *parent) { pMCCtx = parent; }
   public:
     typedef StringMap<MCSymbol*, BumpPtrAllocator&> SymbolTable;
   private:
@@ -65,7 +72,7 @@ namespace llvm {
     ///
     /// We use a bump pointer allocator to avoid the need to track all allocated
     /// objects.
-    BumpPtrAllocator Allocator;
+    BumpPtrAllocator Allocator, AllocatorSyms, AllocatorUNames;
 
     /// Symbols - Bindings of names to symbols.
     SymbolTable Symbols;
@@ -198,7 +205,7 @@ namespace llvm {
 
     /// getUniqueSymbolID() - Return a unique identifier for use in constructing
     /// symbol names.
-    unsigned getUniqueSymbolID() { return NextUniqueID++; }
+    unsigned getUniqueSymbolID();
 
     /// CreateDirectionalLocalSymbol - Create the definition of a directional
     /// local symbol for numbered label (used for "1:" definitions).
@@ -406,9 +413,7 @@ namespace llvm {
       SecureLogUsed = Value;
     }
 
-    void *Allocate(unsigned Size, unsigned Align = 8) {
-      return Allocator.Allocate(Size, Align);
-    }
+    void *Allocate(unsigned Size, unsigned Align = 8);
     void Deallocate(void *Ptr) {
     }
 

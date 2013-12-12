@@ -31,6 +31,7 @@ InlineAsm *InlineAsm::get(FunctionType *Ty, StringRef AsmString,
   InlineAsmKeyType Key(AsmString, Constraints, hasSideEffects, isAlignStack,
                        asmDialect);
   LLVMContextImpl *pImpl = Ty->getContext().pImpl;
+  sys::CondScopedLock locked(pImpl->Mutex[LLVMContextImpl::MT_InlineAsms]);
   return pImpl->InlineAsms.getOrCreate(PointerType::getUnqual(Ty), Key);
 }
 
@@ -48,6 +49,7 @@ InlineAsm::InlineAsm(PointerType *Ty, const std::string &asmString,
 }
 
 void InlineAsm::destroyConstant() {
+  sys::CondScopedLock locked(getType()->getContext().pImpl->Mutex[LLVMContextImpl::MT_InlineAsms]);
   getType()->getContext().pImpl->InlineAsms.remove(this);
   delete this;
 }

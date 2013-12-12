@@ -130,6 +130,8 @@ public:
   DwarfException(AsmPrinter *A);
   virtual ~DwarfException();
 
+  void ReplaceMMInfo(MachineModuleInfo *MMInfo) { MMI = MMInfo; }
+
   /// EndModule - Emit all exception information that should come after the
   /// content.
   virtual void EndModule();

@@ -69,7 +69,7 @@ class LLVM_LIBRARY_VISIBILITY AArch64AsmPrinter : public AsmPrinter {
     return "AArch64 Assembly Printer";
   }
 
-  virtual bool runOnMachineFunction(MachineFunction &MF);
+  virtual bool delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm);
 };
 } // end namespace llvm
 

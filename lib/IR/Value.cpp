@@ -41,10 +41,23 @@ static inline Type *checkType(Type *Ty) {
   return const_cast<Type*>(Ty);
 }
 
+
+/// A mutex which is mainly used for initialization of a Constant
+static sys::CondSmartMutex constInitMtx;
+sys::CondSmartMutex& Value::getMutex() {
+  if (useMutex == NULL) {
+    sys::CondScopedLock locked(constInitMtx);
+    if (useMutex == NULL) {
+      useMutex = new sys::CondSmartMutex();
+    }
+  }
+  return *useMutex;
+}
+
 Value::Value(Type *ty, unsigned scid)
-  : SubclassID(scid), HasValueHandle(0),
+  : SubclassID(scid),
     SubclassOptionalData(0), SubclassData(0), VTy((Type*)checkType(ty)),
-    UseList(0), Name(0) {
+    UseList(0), VHList(0), Name(0), useMutex(0) {
   // FIXME: Why isn't this in the subclass gunk??
   // Note, we cannot call isa<CallInst> before the CallInst has been
   // constructed.
@@ -59,7 +72,7 @@ Value::Value(Type *ty, unsigned scid)
 
 Value::~Value() {
   // Notify all ValueHandles (if present) that this value is going away.
-  if (HasValueHandle)
+  if (VHList)
     ValueHandleBase::ValueIsDeleted(this);
 
 #ifndef NDEBUG      // Only in -g mode...
@@ -83,8 +96,40 @@ Value::~Value() {
   if (Name && SubclassID != MDStringVal)
     Name->Destroy();
 
+  delete useMutex;
+  useMutex = NULL;
+
   // There should be no uses of this object anymore, remove it.
   LeakDetector::removeGarbageObject(this);
+}
+
+void Use::addToListInternal(Use **List) {
+  Next = *List;
+  if (Next) Next->setPrev(&Next);
+  setPrev(List);
+  *List = this;
+}
+void Use::addToList(Use **List) {
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+    return addToListInternal(List);
+  }
+  addToListInternal(List);
+}
+
+void Use::removeFromListInternal() {
+  Use **StrippedPrev = Prev.getPointer();
+  *StrippedPrev = Next;
+  if (Next) Next->setPrev(StrippedPrev);
+}
+void Use::removeFromList() {
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+    return removeFromListInternal();
+  }
+  removeFromListInternal();
 }
 
 /// hasNUses - Return true if this Value has exactly N users.
@@ -307,7 +352,7 @@ void Value::replaceAllUsesWith(Value *New) {
          "replaceAllUses of value with new value of different type!");
 
   // Notify all ValueHandles (if present) that this value is going away.
-  if (HasValueHandle)
+  if (VHList)
     ValueHandleBase::ValueIsRAUWd(this, New);
 
   while (!use_empty()) {
@@ -522,9 +567,39 @@ LLVMContext &Value::getContext() const { return VTy->getContext(); }
 
 /// AddToExistingUseList - Add this ValueHandle to the use list for VP, where
 /// List is known to point into the existing use list.
-void ValueHandleBase::AddToExistingUseList(ValueHandleBase **List) {
-  assert(List && "Handle list is null?");
 
+ValueHandleBase::ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS)
+  : PrevPair(0, Kind), Next(0), VP(RHS.VP) {
+  if (isValid(VP.getPointer())) {
+    Value *Val = VP.getPointer();
+    bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+    if (isShared) {
+      sys::CondScopedLock locked(Val->getMutex());
+      AddToExistingUseListInternal(RHS.getPrevPtr());
+    } else {
+      AddToExistingUseListInternal(RHS.getPrevPtr());
+    }
+  }
+}
+
+Value *ValueHandleBase::operator=(const ValueHandleBase &RHS) {
+  if (VP.getPointer() == RHS.VP.getPointer()) return RHS.VP.getPointer();
+  if (isValid(VP.getPointer())) RemoveFromUseList();
+  VP.setPointer(RHS.VP.getPointer());
+  if (isValid(VP.getPointer())) {
+    Value *Val = VP.getPointer();
+    bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+    if (isShared) {
+      sys::CondScopedLock locked(Val->getMutex());
+      AddToExistingUseListInternal(RHS.getPrevPtr());
+    } else {
+      AddToExistingUseListInternal(RHS.getPrevPtr());
+    }
+  }
+  return VP.getPointer();
+}
+
+void ValueHandleBase::AddToExistingUseListInternal(ValueHandleBase **List) {
   // Splice ourselves into the list.
   Next = *List;
   *List = this;
@@ -534,67 +609,52 @@ void ValueHandleBase::AddToExistingUseList(ValueHandleBase **List) {
     assert(VP.getPointer() == Next->VP.getPointer() && "Added to wrong list?");
   }
 }
+void ValueHandleBase::AddToExistingUseList(ValueHandleBase **List) {
+  assert(List && "Handle list is null?");
 
-void ValueHandleBase::AddToExistingUseListAfter(ValueHandleBase *List) {
-  assert(List && "Must insert after existing node");
+  Value *Val = VP.getPointer();
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+    return AddToExistingUseListInternal(List);
+  }
+  AddToExistingUseListInternal(List);
+}
 
+void ValueHandleBase::AddToExistingUseListAfterInternal(ValueHandleBase *List) {
   Next = List->Next;
   setPrevPtr(&List->Next);
   List->Next = this;
   if (Next)
     Next->setPrevPtr(&Next);
 }
+void ValueHandleBase::AddToExistingUseListAfter(ValueHandleBase *List) {
+  assert(List && "Must insert after existing node");
+
+  Value *Val = VP.getPointer();
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+    return AddToExistingUseListAfterInternal(List);
+  }
+  AddToExistingUseListAfterInternal(List);
+}
 
 /// AddToUseList - Add this ValueHandle to the use list for VP.
 void ValueHandleBase::AddToUseList() {
-  assert(VP.getPointer() && "Null pointer doesn't have a use list!");
-
-  LLVMContextImpl *pImpl = VP.getPointer()->getContext().pImpl;
-
-  if (VP.getPointer()->HasValueHandle) {
-    // If this value already has a ValueHandle, then it must be in the
-    // ValueHandles map already.
-    ValueHandleBase *&Entry = pImpl->ValueHandles[VP.getPointer()];
-    assert(Entry != 0 && "Value doesn't have any handles?");
-    AddToExistingUseList(&Entry);
-    return;
+  Value *Val = VP.getPointer();
+  assert(Val && "Null pointer doesn't have a use list!");
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+    ValueHandleBase *&Entry = Val->VHList;
+    return AddToExistingUseListInternal(&Entry);
   }
-
-  // Ok, it doesn't have any handles yet, so we must insert it into the
-  // DenseMap.  However, doing this insertion could cause the DenseMap to
-  // reallocate itself, which would invalidate all of the PrevP pointers that
-  // point into the old table.  Handle this by checking for reallocation and
-  // updating the stale pointers only if needed.
-  DenseMap<Value*, ValueHandleBase*> &Handles = pImpl->ValueHandles;
-  const void *OldBucketPtr = Handles.getPointerIntoBucketsArray();
-
-  ValueHandleBase *&Entry = Handles[VP.getPointer()];
-  assert(Entry == 0 && "Value really did already have handles?");
-  AddToExistingUseList(&Entry);
-  VP.getPointer()->HasValueHandle = true;
-
-  // If reallocation didn't happen or if this was the first insertion, don't
-  // walk the table.
-  if (Handles.isPointerIntoBucketsArray(OldBucketPtr) ||
-      Handles.size() == 1) {
-    return;
-  }
-
-  // Okay, reallocation did happen.  Fix the Prev Pointers.
-  for (DenseMap<Value*, ValueHandleBase*>::iterator I = Handles.begin(),
-       E = Handles.end(); I != E; ++I) {
-    assert(I->second && I->first == I->second->VP.getPointer() &&
-           "List invariant broken!");
-    I->second->setPrevPtr(&I->second);
-  }
+  ValueHandleBase *&Entry = Val->VHList;
+  AddToExistingUseListInternal(&Entry);
 }
 
-/// RemoveFromUseList - Remove this ValueHandle from its current use list.
-void ValueHandleBase::RemoveFromUseList() {
-  assert(VP.getPointer() && VP.getPointer()->HasValueHandle &&
-         "Pointer doesn't have a use list!");
-
-  // Unlink this from its use list.
+void ValueHandleBase::RemoveFromUseListInternal() {
   ValueHandleBase **PrevPtr = getPrevPtr();
   assert(*PrevPtr == this && "List invariant broken");
 
@@ -604,26 +664,29 @@ void ValueHandleBase::RemoveFromUseList() {
     Next->setPrevPtr(PrevPtr);
     return;
   }
+}
+/// RemoveFromUseList - Remove this ValueHandle from its current use list.
+void ValueHandleBase::RemoveFromUseList() {
+  Value *Val = VP.getPointer();
 
-  // If the Next pointer was null, then it is possible that this was the last
-  // ValueHandle watching VP.  If so, delete its entry from the ValueHandles
-  // map.
-  LLVMContextImpl *pImpl = VP.getPointer()->getContext().pImpl;
-  DenseMap<Value*, ValueHandleBase*> &Handles = pImpl->ValueHandles;
-  if (Handles.isPointerIntoBucketsArray(PrevPtr)) {
-    Handles.erase(VP.getPointer());
-    VP.getPointer()->HasValueHandle = false;
+  // Unlink this from its use list.
+  bool isShared = Val->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(Val->getMutex());
+
+    assert(Val && Val->VHList &&
+         "Pointer doesn't have a use list!");
+    return RemoveFromUseListInternal();
   }
+
+  assert(Val && Val->VHList &&
+         "Pointer doesn't have a use list!");
+  RemoveFromUseListInternal();
 }
 
+void ValueHandleBase::ValueIsDeletedInternal(Value *V) {
+  ValueHandleBase *Entry = V->VHList;
 
-void ValueHandleBase::ValueIsDeleted(Value *V) {
-  assert(V->HasValueHandle && "Should only be called if ValueHandles present");
-
-  // Get the linked list base, which is guaranteed to exist since the
-  // HasValueHandle flag is set.
-  LLVMContextImpl *pImpl = V->getContext().pImpl;
-  ValueHandleBase *Entry = pImpl->ValueHandles[V];
   assert(Entry && "Value bit set but no entries exist");
 
   // We use a local ValueHandleBase as an iterator so that ValueHandles can add
@@ -636,8 +699,8 @@ void ValueHandleBase::ValueIsDeleted(Value *V) {
   // the handle is still present once we have finished processing all the other
   // value handles (it is fine to momentarily add then remove a value handle).
   for (ValueHandleBase Iterator(Assert, *Entry); Entry; Entry = Iterator.Next) {
-    Iterator.RemoveFromUseList();
-    Iterator.AddToExistingUseListAfter(Entry);
+    Iterator.RemoveFromUseListInternal();
+    Iterator.AddToExistingUseListAfterInternal(Entry);
     assert(Entry->Next == &Iterator && "Loop invariant broken.");
 
     switch (Entry->getKind()) {
@@ -660,11 +723,11 @@ void ValueHandleBase::ValueIsDeleted(Value *V) {
   }
 
   // All callbacks, weak references, and assertingVHs should be dropped by now.
-  if (V->HasValueHandle) {
+  if (V->VHList) {
 #ifndef NDEBUG      // Only in +Asserts mode...
     dbgs() << "While deleting: " << *V->getType() << " %" << V->getName()
            << "\n";
-    if (pImpl->ValueHandles[V]->getKind() == Assert)
+    if (V->VHList->getKind() == Assert)
       llvm_unreachable("An asserting value handle still pointed to this"
                        " value!");
 
@@ -672,16 +735,24 @@ void ValueHandleBase::ValueIsDeleted(Value *V) {
     llvm_unreachable("All references to V were not removed?");
   }
 }
-
-
-void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
-  assert(Old->HasValueHandle &&"Should only be called if ValueHandles present");
-  assert(Old != New && "Changing value into itself!");
+void ValueHandleBase::ValueIsDeleted(Value *V) {
 
   // Get the linked list base, which is guaranteed to exist since the
   // HasValueHandle flag is set.
-  LLVMContextImpl *pImpl = Old->getContext().pImpl;
-  ValueHandleBase *Entry = pImpl->ValueHandles[Old];
+
+  bool isShared = V->isSharedValue() && llvm_is_multithreaded();
+  if (isShared) {
+    sys::CondScopedLock locked(V->getMutex());
+    assert(V->VHList && "Should only be called if ValueHandles present");
+    return ValueIsDeletedInternal(V);
+  }
+  assert(V->VHList && "Should only be called if ValueHandles present");
+  ValueIsDeletedInternal(V);
+}
+
+
+void ValueHandleBase::ValueIsRAUWdInternal(Value *Old, Value *New) {
+  ValueHandleBase *Entry = Old->VHList;
 
   assert(Entry && "Value bit set but no entries exist");
 
@@ -690,8 +761,8 @@ void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
   // breaking our iteration.  This is not really an AssertingVH; we
   // just have to give ValueHandleBase some kind.
   for (ValueHandleBase Iterator(Assert, *Entry); Entry; Entry = Iterator.Next) {
-    Iterator.RemoveFromUseList();
-    Iterator.AddToExistingUseListAfter(Entry);
+    Iterator.RemoveFromUseListInternal();
+    Iterator.AddToExistingUseListAfterInternal(Entry);
     assert(Entry->Next == &Iterator && "Loop invariant broken.");
 
     switch (Entry->getKind()) {
@@ -719,8 +790,8 @@ void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
 #ifndef NDEBUG
   // If any new tracking or weak value handles were added while processing the
   // list, then complain about it now.
-  if (Old->HasValueHandle)
-    for (Entry = pImpl->ValueHandles[Old]; Entry; Entry = Entry->Next)
+  if (Old->VHList)
+    for (Entry = Old->VHList; Entry; Entry = Entry->Next)
       switch (Entry->getKind()) {
       case Tracking:
       case Weak:
@@ -733,6 +804,20 @@ void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
         break;
       }
 #endif
+}
+void ValueHandleBase::ValueIsRAUWd(Value *Old, Value *New) {
+  assert(Old != New && "Changing value into itself!");
+
+  // Get the linked list base, which is guaranteed to exist since the
+  // HasValueHandle flag is set.
+  bool isSharedOld = Old->isSharedValue() && llvm_is_multithreaded();
+  if (isSharedOld) {
+    sys::CondScopedLock lockedOld(Old->getMutex());
+    assert(Old->VHList &&"Should only be called if ValueHandles present");
+    return ValueIsRAUWdInternal(Old, New);
+  }
+  assert(Old->VHList &&"Should only be called if ValueHandles present");
+  ValueIsRAUWdInternal(Old, New);
 }
 
 // Pin the vtable to this file.

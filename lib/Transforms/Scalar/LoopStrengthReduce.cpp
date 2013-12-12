@@ -3072,7 +3072,7 @@ LSRInstance::CollectLoopInvariantFixupsAndFormulae() {
            UI != UE; ++UI) {
         const Instruction *UserInst = dyn_cast<Instruction>(*UI);
         // Ignore non-instructions.
-        if (!UserInst)
+        if (!UserInst || !UserInst->getParent())
           continue;
         // Ignore instructions in other functions (as can happen with
         // Constants).

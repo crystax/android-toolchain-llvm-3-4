@@ -58,6 +58,11 @@ TimeCompilations("time-compilations", cl::Hidden, cl::init(1u),
                  cl::value_desc("N"),
                  cl::desc("Repeat compilation N times for timing"));
 
+static cl::opt<unsigned>
+Threads("thread", cl::Hidden, cl::init(1u),
+                 cl::value_desc("N"),
+                 cl::desc("Start N Threads to compile module in parallel"));
+
 // Determine optimization level.
 static cl::opt<char>
 OptLevel("O",
@@ -193,10 +198,21 @@ int main(int argc, char **argv) {
 
   // Compile the module TimeCompilations times to give better compile time
   // metrics.
-  for (unsigned I = TimeCompilations; I; --I)
+  for (unsigned I = TimeCompilations; I; --I) {
+    LLVMContext Context;
     if (int RetVal = compileModule(argv, Context))
       return RetVal;
+  }
   return 0;
+}
+
+static void deletePMList(unsigned size, PassManager **PMList, TargetMachine **TMList) {
+  for (unsigned index = 0; index < size; index++) {
+    delete PMList[index];
+    delete TMList[index];
+  }
+  delete []PMList;
+  delete []TMList;
 }
 
 static int compileModule(char **argv, LLVMContext &Context) {
@@ -280,63 +296,77 @@ static int compileModule(char **argv, LLVMContext &Context) {
   Options.EnableSegmentedStacks = SegmentedStacks;
   Options.UseInitArray = UseInitArray;
 
-  OwningPtr<TargetMachine>
-    target(TheTarget->createTargetMachine(TheTriple.getTriple(),
-                                          MCPU, FeaturesStr, Options,
-                                          RelocModel, CMModel, OLvl));
-  assert(target.get() && "Could not allocate target machine!");
-  assert(mod && "Should have exited after outputting help!");
-  TargetMachine &Target = *target.get();
+  unsigned funcNum = 0;
+  for (Module::iterator I = mod->begin(), E = mod->end(); I != E; ++I) {
+    if (!I->isDeclaration()) {
+      I->setSeq(funcNum++);
+    }
+  }
+  if (funcNum == 0) {
+    funcNum = 1;
+  }
+  if (Threads > funcNum) {
+    Threads = funcNum;
+  }
 
-  if (DisableDotLoc)
-    Target.setMCUseLoc(false);
+  PassManager **PMList = new PassManager*[Threads];
+  TargetMachine **TMList = new TargetMachine*[Threads];
+  for (unsigned thd = 0; thd < Threads; thd++) {
+    PMList[thd] = new PassManager();
+    TMList[thd] = TheTarget->createTargetMachine(TheTriple.getTriple(),
+                                            MCPU, FeaturesStr, Options,
+                                            RelocModel, CMModel, OLvl);
+    assert(TMList[thd] && "Could not allocate target machine!");
+    assert(mod && "Should have exited after outputting help!");
+    TargetMachine &Target = *TMList[thd];
 
-  if (DisableCFI)
-    Target.setMCUseCFI(false);
+    if (DisableDotLoc)
+      Target.setMCUseLoc(false);
+    if (EnableDwarfDirectory)
+      Target.setMCUseDwarfDirectory(true);
 
-  if (EnableDwarfDirectory)
-    Target.setMCUseDwarfDirectory(true);
+    if (GenerateSoftFloatCalls)
+      FloatABIForCalls = FloatABI::Soft;
 
-  if (GenerateSoftFloatCalls)
-    FloatABIForCalls = FloatABI::Soft;
-
-  // Disable .loc support for older OS X versions.
-  if (TheTriple.isMacOSX() &&
-      TheTriple.isMacOSXVersionLT(10, 6))
-    Target.setMCUseLoc(false);
-
+    // Disable .loc support for older OS X versions.
+    if (TheTriple.isMacOSX() &&
+        TheTriple.isMacOSXVersionLT(10, 6))
+      Target.setMCUseLoc(false);
+  }
   // Figure out where we are going to send the output.
   OwningPtr<tool_output_file> Out
     (GetOutputStream(TheTarget->getName(), TheTriple.getOS(), argv[0]));
   if (!Out) return 1;
 
   // Build up all of the passes that we want to do to the module.
-  PassManager PM;
 
-  // Add an appropriate TargetLibraryInfo pass for the module's triple.
-  TargetLibraryInfo *TLI = new TargetLibraryInfo(TheTriple);
-  if (DisableSimplifyLibCalls)
-    TLI->disableAllFunctions();
-  PM.add(TLI);
+  for (unsigned thd = 0; thd < Threads; thd++) {
+    TargetMachine &Target = *TMList[thd];
+    // Add an appropriate TargetLibraryInfo pass for the module's triple.
+    TargetLibraryInfo *TLI = new TargetLibraryInfo(TheTriple);
+    if (DisableSimplifyLibCalls)
+      TLI->disableAllFunctions();
+    PMList[thd]->add(TLI);
 
-  // Add intenal analysis passes from the target machine.
-  Target.addAnalysisPasses(PM);
+    // Add intenal analysis passes from the target machine.
+    Target.addAnalysisPasses(*PMList[thd]);
 
-  // Add the target data from the target machine, if it exists, or the module.
-  if (const DataLayout *TD = Target.getDataLayout())
-    PM.add(new DataLayout(*TD));
-  else
-    PM.add(new DataLayout(mod));
-
-  // Override default to generate verbose assembly.
-  Target.setAsmVerbosityDefault(true);
-
-  if (RelaxAll) {
-    if (FileType != TargetMachine::CGFT_ObjectFile)
-      errs() << argv[0]
-             << ": warning: ignoring -mc-relax-all because filetype != obj";
+    // Add the target data from the target machine, if it exists, or the module.
+    if (const DataLayout *TD = Target.getDataLayout())
+      PMList[thd]->add(new DataLayout(*TD));
     else
-      Target.setMCRelaxAll(true);
+      PMList[thd]->add(new DataLayout(mod));
+
+    // Override default to generate verbose assembly.
+    Target.setAsmVerbosityDefault(true);
+
+    if (RelaxAll) {
+      if (FileType != TargetMachine::CGFT_ObjectFile)
+        errs() << argv[0]
+               << ": warning: ignoring -mc-relax-all because filetype != obj";
+      else
+        Target.setMCRelaxAll(true);
+    }
   }
 
   {
@@ -349,6 +379,7 @@ static int compileModule(char **argv, LLVMContext &Context) {
       const PassInfo *PI = PR->getPassInfo(StartAfter);
       if (!PI) {
         errs() << argv[0] << ": start-after pass is not registered.\n";
+        deletePMList(Threads, PMList, TMList);
         return 1;
       }
       StartAfterID = PI->getTypeInfo();
@@ -357,23 +388,30 @@ static int compileModule(char **argv, LLVMContext &Context) {
       const PassInfo *PI = PR->getPassInfo(StopAfter);
       if (!PI) {
         errs() << argv[0] << ": stop-after pass is not registered.\n";
+        deletePMList(Threads, PMList, TMList);
         return 1;
       }
       StopAfterID = PI->getTypeInfo();
     }
-
-    // Ask the target to add backend passes as necessary.
-    if (Target.addPassesToEmitFile(PM, FOS, FileType, NoVerify,
-                                   StartAfterID, StopAfterID)) {
-      errs() << argv[0] << ": target does not support generation of this"
-             << " file type!\n";
-      return 1;
+    for (unsigned thd = 0; thd < Threads; thd++) {
+      TargetMachine &Target = *TMList[thd];
+      // Ask the target to add backend passes as necessary.
+      if (Target.addPassesToEmitFile(*PMList[thd], FOS, FileType, NoVerify,
+                                     StartAfterID, StopAfterID)) {
+        errs() << argv[0] << ": target does not support generation of this"
+               << " file type!\n";
+        deletePMList(Threads, PMList, TMList);
+        return 1;
+      }
+      if (thd > 0) {
+        PMList[0]->addChild(PMList[thd]);
+      }
     }
-
     // Before executing passes, print the final values of the LLVM options.
     cl::PrintOptionValues();
 
-    PM.run(*mod);
+    PMList[0]->run(*mod);
+    deletePMList(Threads, PMList, TMList);
   }
 
   // Declare success.

@@ -49,14 +49,22 @@ MipsTargetStreamer &MipsAsmPrinter::getTargetStreamer() {
   return static_cast<MipsTargetStreamer &>(OutStreamer.getTargetStreamer());
 }
 
-bool MipsAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+static sys::CondSmartMutex mipsAsmPrinterMutex;
+
+/// Method to help another asmPrinter to execute runOnMachineFunction on delegation
+bool MipsAsmPrinter::delegateRunOnMachineFunctionFor(MachineFunction &MF, AsmPrinter *childAsm) {
+  sys::CondScopedLock locked(mipsAsmPrinterMutex);
+  if (llvm_is_multithreaded()) {
+    OutStreamer.setCurrFunc(MF.getFunctionNumber());
+  }
+
   // Initialize TargetLoweringObjectFile.
   if (Subtarget->allowMixed16_32())
     const_cast<TargetLoweringObjectFile&>(getObjFileLowering())
       .Initialize(OutContext, TM);
   MipsFI = MF.getInfo<MipsFunctionInfo>();
   MCP = MF.getConstantPool();
-  AsmPrinter::runOnMachineFunction(MF);
+  AsmPrinter::delegateRunOnMachineFunctionFor(MF, childAsm);
   return true;
 }
 
