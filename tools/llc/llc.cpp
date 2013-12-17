@@ -173,7 +173,6 @@ int main(int argc, char **argv) {
   // Enable debug stream buffering.
   EnableDebugBuffering = true;
 
-  LLVMContext &Context = getGlobalContext();
   llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
 
   // Initialize targets first, so that --version shows registered targets.
@@ -322,6 +321,10 @@ static int compileModule(char **argv, LLVMContext &Context) {
 
     if (DisableDotLoc)
       Target.setMCUseLoc(false);
+
+    if (DisableCFI)
+      Target.setMCUseCFI(false);
+
     if (EnableDwarfDirectory)
       Target.setMCUseDwarfDirectory(true);
 
