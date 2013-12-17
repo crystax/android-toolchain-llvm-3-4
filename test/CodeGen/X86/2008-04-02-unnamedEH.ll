@@ -11,6 +11,6 @@ define internal void @""() {
 	call i32 @_Z3barv( )		; <i32>:4 [#uses=1]
 	ret void
 }
-; CHECK: unnamed_1.eh
+; CHECK: unnamed_{{[0-9]+}}.eh
 
 declare i32 @_Z3barv()
