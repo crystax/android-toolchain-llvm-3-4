@@ -154,7 +154,7 @@ namespace llvm
       }
     };
     typedef SmartScopedReader<false> ScopedReader;
-	typedef SmartScopedReader<true> CondScopedReader;
+    typedef SmartScopedReader<true> CondScopedReader;
 
     /// ScopedWriter - RAII acquisition of a writer lock
     template<bool mt_only>
@@ -170,7 +170,7 @@ namespace llvm
       }
     };
     typedef SmartScopedWriter<false> ScopedWriter;
-	typedef SmartScopedWriter<true> CondScopedWriter;
+    typedef SmartScopedWriter<true> CondScopedWriter;
   }
 }
 
