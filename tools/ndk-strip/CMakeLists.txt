@@ -5,11 +5,11 @@ set(LLVM_LINK_COMPONENTS
   codegen
   instrumentation
   ipo
+  irreader
   linker
   selectiondag
   )
 
-add_llvm_tool(le32-none-ndk-link
-  AndroidBitcodeLinker.cpp
-  le32-none-ndk-link.cpp
+add_llvm_tool(ndk-strip
+  ndk-strip.cpp
   )

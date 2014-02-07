@@ -220,6 +220,7 @@ static int compileModule(char **argv, LLVMContext &Context) {
   OwningPtr<Module> M;
   Module *mod = 0;
   Triple TheTriple;
+  Triple OrigTriple;
 
   bool SkipModule = MCPU == "help" ||
                     (!MAttrs.empty() && MAttrs.front() == "help");
@@ -232,6 +233,8 @@ static int compileModule(char **argv, LLVMContext &Context) {
       Err.print(argv[0], errs());
       return 1;
     }
+
+    OrigTriple.setTriple(mod->getTargetTriple());
 
     // If we are supposed to override the target triple, do so now.
     if (!TargetTriple.empty())
@@ -330,6 +333,13 @@ static int compileModule(char **argv, LLVMContext &Context) {
 
     if (GenerateSoftFloatCalls)
       FloatABIForCalls = FloatABI::Soft;
+
+    if (OrigTriple.getOS() == llvm::Triple::NDK) {
+      if (OrigTriple.getArch() == llvm::Triple::le32 ||
+          OrigTriple.getArch() == llvm::Triple::le64) {
+        Target.setMCNoExecStack(true);
+      }
+    }
 
     // Disable .loc support for older OS X versions.
     if (TheTriple.isMacOSX() &&

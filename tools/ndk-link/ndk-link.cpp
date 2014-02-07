@@ -100,6 +100,9 @@ NoUndefined("no-undefined", cl::desc("-z defs"));
 static cl::list<std::string>
 ZOptions("z", cl::desc("-z keyword"), cl::value_desc("keyword"));
 
+static cl::opt<bool>
+PIE("pie", cl::desc("position independent executable"));
+
 static cl::list<std::string> CO1("Wl", cl::Prefix,
   cl::desc("Compatibility option: ignored"));
 

@@ -1,6 +1,6 @@
 LEVEL := ../..
 
-TOOLNAME = le32-none-ndk-strip
+TOOLNAME = ndk-strip
 
 LINK_COMPONENTS := asmparser bitreader bitwriter codegen \
                    instrumentation ipo irreader linker selectiondag

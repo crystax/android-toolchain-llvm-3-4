@@ -17,6 +17,7 @@
 #include "ReplaceUnwindHeaderSizePass.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CallSite.h"
@@ -26,9 +27,15 @@ char ReplaceUnwindHeaderSizePass::ID = 0;
 bool ReplaceUnwindHeaderSizePass::runOnModule(llvm::Module &M) {
   bool changed = false;
   llvm::LLVMContext &ctx = M.getContext();
-  llvm::APInt unwind_hdr_size(/*numBits=*/32, /*val=*/getTargetUnwindHeaderSize());
-  llvm::ConstantInt *size_value = llvm::ConstantInt::get(ctx, unwind_hdr_size);
-  const char *k_func_name = "__ndk_le32_getUnwindHeaderSize";
+  llvm::OwningPtr<llvm::APInt> unwind_hdr_size;
+  if (M.getPointerSize() == llvm::Module::Pointer64)
+    unwind_hdr_size.reset(new llvm::APInt(/*numBits=*/64,
+                                          /*val=*/getTargetUnwindHeaderSize()));
+  else
+    unwind_hdr_size.reset(new llvm::APInt(/*numBits=*/32,
+                                          /*val=*/getTargetUnwindHeaderSize()));
+  llvm::ConstantInt *size_value = llvm::ConstantInt::get(ctx, *unwind_hdr_size);
+  const char *k_func_name = "__ndk_unknown_getUnwindHeaderSize";
 
   llvm::SmallVector<llvm::Instruction*, 8> Insts;
   llvm::Function *Func = 0;

@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/IR/CallingConv.h"
@@ -2787,7 +2788,8 @@ bool Evaluator::EvaluateFunction(Function *F, Constant *&RetVal,
 /// EvaluateStaticConstructor - Evaluate static constructors in the function, if
 /// we can.  Return true if we can, false otherwise.
 static bool EvaluateStaticConstructor(Function *F, const DataLayout *TD,
-                                      const TargetLibraryInfo *TLI) {
+                                      const TargetLibraryInfo *TLI,
+                                      const Module *M) {
   // Call the function.
   Evaluator Eval(TD, TLI);
   Constant *RetValDummy;
@@ -2803,7 +2805,11 @@ static bool EvaluateStaticConstructor(Function *F, const DataLayout *TD,
            Eval.getMutatedMemory().begin(), E = Eval.getMutatedMemory().end();
          I != E; ++I)
       CommitValueTo(I->second, I->first);
-    if (!DisableGlobalCtorConstPromotion)
+    Triple triple(M->getTargetTriple());
+    bool is_unknown_ndk = triple.getOS() == Triple::NDK &&
+                          (triple.getArch() == Triple::le32 ||
+                           triple.getArch() == Triple::le64);
+    if (!DisableGlobalCtorConstPromotion && !is_unknown_ndk)
       for (SmallPtrSet<GlobalVariable*, 8>::const_iterator I =
              Eval.getInvariants().begin(), E = Eval.getInvariants().end();
            I != E; ++I)
@@ -2838,7 +2844,7 @@ bool GlobalOpt::OptimizeGlobalCtorsList(GlobalVariable *&GCL) {
     if (F->empty()) continue;
 
     // If we can evaluate the ctor at compile time, do.
-    if (EvaluateStaticConstructor(F, TD, TLI)) {
+    if (EvaluateStaticConstructor(F, TD, TLI, GCL->getParent())) {
       Ctors.erase(Ctors.begin()+i);
       MadeChange = true;
       --i;

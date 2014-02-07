@@ -56,4 +56,5 @@ ExpandVAArgPass* createARMExpandVAArgPass();
 ExpandVAArgPass* createX86ExpandVAArgPass();
 ExpandVAArgPass* createMipsExpandVAArgPass();
 
+ExpandVAArgPass* createArm64ExpandVAArgPass();
 #endif // EXPAND_VAARG_PASS_H

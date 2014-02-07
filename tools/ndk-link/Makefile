@@ -1,6 +1,6 @@
 LEVEL := ../..
 
-TOOLNAME = le32-none-ndk-link
+TOOLNAME = ndk-link
 
 LINK_COMPONENTS := asmparser bitreader bitwriter codegen \
                    instrumentation ipo linker selectiondag

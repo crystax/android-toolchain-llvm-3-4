@@ -206,7 +206,8 @@ AndroidBitcodeLinker::LinkInAndroidBitcode(AndroidBitcodeItem &Item) {
 
       Triple triple(M.get()->getTargetTriple());
 
-      if (triple.getArch() != Triple::le32 || triple.getOS() != Triple::NDK) {
+      if ((triple.getArch() != Triple::le32 && triple.getArch() != Triple::le64) ||
+          triple.getOS() != Triple::NDK) {
         Item.setNative(true);
         return error("Cannot link '" + File.str() + "', triple:" +  M.get()->getTargetTriple());
       }
