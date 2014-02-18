@@ -267,6 +267,8 @@ void VirtRegRewriter::rewrite() {
   SmallVector<unsigned, 8> SuperKills;
   SmallPtrSet<const MachineInstr *, 4> NoReturnInsts;
 
+  bool HasUWTable = MF->getFunction()->hasFnAttribute(Attribute::UWTable);
+
   for (MachineFunction::iterator MBBI = MF->begin(), MBBE = MF->end();
        MBBI != MBBE; ++MBBI) {
     DEBUG(MBBI->print(dbgs(), Indexes));
@@ -276,9 +278,12 @@ void VirtRegRewriter::rewrite() {
       MachineInstr *MI = MII;
       ++MII;
 
-      // Check if this instruction is a call to a noreturn function.
-      // If so, all the definitions set by this instruction can be ignored.
-      if (IsExitBB && MI->isCall())
+      // Check if this instruction is a call to a noreturn function.  If this
+      // is a call to noreturn function and we don't need the stack unwinding
+      // functionality (i.e. this function does not have uwtable attribute and
+      // the callee function has the nounwind attribute), then we can ignore
+      // the definitions set by this instruction.
+      if (!HasUWTable && IsExitBB && MI->isCall())
         for (MachineInstr::mop_iterator MOI = MI->operands_begin(),
                MOE = MI->operands_end(); MOI != MOE; ++MOI) {
           MachineOperand &MO = *MOI;
