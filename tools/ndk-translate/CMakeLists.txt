@@ -17,8 +17,10 @@ add_llvm_tool(ndk-translate
   ExpandVAArgPass.cpp
   MipsExpandVAArg.cpp
   MipsReplaceUnwindHeaderSize.cpp
+  Mips64ExpandVAArg.cpp
   ReplaceUnwindHeaderSizePass.cpp
   X86ExpandVAArg.cpp
   X86ReplaceUnwindHeaderSize.cpp
+  X86_64ExpandVAArg.cpp
   ndk-translate.cpp
   )
