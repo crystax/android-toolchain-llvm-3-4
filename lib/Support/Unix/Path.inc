@@ -524,7 +524,7 @@ error_code status(int FD, file_status &Result) {
 }
 
 error_code setLastModificationAndAccessTime(int FD, TimeValue Time) {
-#if defined(HAVE_FUTIMENS)
+#if defined(HAVE_FUTIMENS) && !defined(DISABLE_FUTIMENS)
   timespec Times[2];
   Times[0].tv_sec = Time.toPosixTime();
   Times[0].tv_nsec = 0;
