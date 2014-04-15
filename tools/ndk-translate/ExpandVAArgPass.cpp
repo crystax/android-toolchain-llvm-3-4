@@ -45,6 +45,14 @@ bool ExpandVAArgPass::runOnModule(llvm::Module &pM) {
     }
   }
 
+  for (llvm::SmallVector<llvm::Instruction*, 8>::iterator i = Insts.begin(),
+       e = Insts.end(); i != e; ++i) {
+    llvm::Value *v = expandVAArg(*i);
+    (*i)->replaceAllUsesWith(v);
+    (*i)->eraseFromParent();
+    changed = true;
+  }
+
   return changed;
 }
 
