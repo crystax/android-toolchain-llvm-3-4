@@ -1408,7 +1408,7 @@ else
     AC_MSG_WARN([specified python ($PYTHON) is not usable, searching path])
   fi
 
-  AC_PATH_PROG([PYTHON], [python python2 python26],
+  AC_PATH_PROGS([PYTHON], [python26 python2 python],
                [AC_MSG_RESULT([not found])
                 AC_MSG_ERROR([could not find python 2.5 or higher])])
 fi
